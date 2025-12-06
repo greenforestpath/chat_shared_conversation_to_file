@@ -1,24 +1,24 @@
 {
-  "name": "chatgpt-shared-conversation-to-markdown-file",
+  "name": "chat-shared-conversation-to-file",
   "version": "0.1.0",
-  "description": "CLI to download a ChatGPT share link and save it as clean Markdown.",
+  "description": "CLI to download public share links (ChatGPT/Claude/Gemini/Grok) and save clean Markdown + HTML transcripts.",
   "license": "MIT",
   "bin": {
-    "csctm": "./dist/csctm"
+    "csctf": "./dist/csctf"
   },
   "type": "module",
   "scripts": {
-    "build": "bun build src/index.ts --compile --outfile dist/csctm --external electron --external chromium-bidi/lib/cjs/bidiMapper/BidiMapper --external chromium-bidi/lib/cjs/cdp/CdpConnection",
-    "build:mac-arm64": "bun build src/index.ts --compile --target=bun-darwin-arm64 --outfile dist/csctm-macos-arm64 --external electron --external chromium-bidi/lib/cjs/bidiMapper/BidiMapper --external chromium-bidi/lib/cjs/cdp/CdpConnection",
-    "build:mac-x64": "bun build src/index.ts --compile --target=bun-darwin-x64 --outfile dist/csctm-macos-x64 --external electron --external chromium-bidi/lib/cjs/bidiMapper/BidiMapper --external chromium-bidi/lib/cjs/cdp/CdpConnection",
-    "build:linux-x64": "bun build src/index.ts --compile --target=bun-linux-x64 --outfile dist/csctm-linux-x64 --external electron --external chromium-bidi/lib/cjs/bidiMapper/BidiMapper --external chromium-bidi/lib/cjs/cdp/CdpConnection",
-    "build:linux-arm64": "bun build src/index.ts --compile --target=bun-linux-arm64 --outfile dist/csctm-linux-arm64 --external electron --external chromium-bidi/lib/cjs/bidiMapper/BidiMapper --external chromium-bidi/lib/cjs/cdp/CdpConnection",
-    "build:windows-x64": "bun build src/index.ts --compile --target=bun-windows-x64 --outfile dist/csctm-windows-x64.exe --external electron --external chromium-bidi/lib/cjs/bidiMapper/BidiMapper --external chromium-bidi/lib/cjs/cdp/CdpConnection",
+    "build": "bun build src/index.ts --compile --outfile dist/csctf --external electron --external chromium-bidi/lib/cjs/bidiMapper/BidiMapper --external chromium-bidi/lib/cjs/cdp/CdpConnection",
+    "build:mac-arm64": "bun build src/index.ts --compile --target=bun-darwin-arm64 --outfile dist/csctf-macos-arm64 --external electron --external chromium-bidi/lib/cjs/bidiMapper/BidiMapper --external chromium-bidi/lib/cjs/cdp/CdpConnection",
+    "build:mac-x64": "bun build src/index.ts --compile --target=bun-darwin-x64 --outfile dist/csctf-macos-x64 --external electron --external chromium-bidi/lib/cjs/bidiMapper/BidiMapper --external chromium-bidi/lib/cjs/cdp/CdpConnection",
+    "build:linux-x64": "bun build src/index.ts --compile --target=bun-linux-x64 --outfile dist/csctf-linux-x64 --external electron --external chromium-bidi/lib/cjs/bidiMapper/BidiMapper --external chromium-bidi/lib/cjs/cdp/CdpConnection",
+    "build:linux-arm64": "bun build src/index.ts --compile --target=bun-linux-arm64 --outfile dist/csctf-linux-arm64 --external electron --external chromium-bidi/lib/cjs/bidiMapper/BidiMapper --external chromium-bidi/lib/cjs/cdp/CdpConnection",
+    "build:windows-x64": "bun build src/index.ts --compile --target=bun-windows-x64 --outfile dist/csctf-windows-x64.exe --external electron --external chromium-bidi/lib/cjs/bidiMapper/BidiMapper --external chromium-bidi/lib/cjs/cdp/CdpConnection",
     "build:all": "bun run build:mac-arm64 && bun run build:mac-x64 && bun run build:linux-x64 && bun run build:linux-arm64 && bun run build:windows-x64",
     "lint": "bunx eslint src --max-warnings=0",
     "typecheck": "bunx tsc --noEmit",
     "test": "bun test",
-    "test:e2e": "CSCTM_E2E=1 bun test e2e/e2e.test.ts",
+    "test:e2e": "CSCTF_E2E=1 bun test e2e/e2e.test.ts",
     "check": "bun run lint && bun run typecheck",
     "dev": "bun run src/index.ts"
   },

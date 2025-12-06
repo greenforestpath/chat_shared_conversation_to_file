@@ -5,14 +5,14 @@ shopt -s lastpipe 2>/dev/null || true
 
 VERSION="${VERSION:-}"
 OWNER="${OWNER:-Dicklesworthstone}"
-REPO="${REPO:-chatgpt_shared_conversation_to_markdown_file}"
-BINARY="${BINARY:-csctm}"
+REPO="${REPO:-chat_shared_conversation_to_file}"
+BINARY="${BINARY:-csctf}"
 DEST_DEFAULT="$HOME/.local/bin"
 DEST="${DEST:-$DEST_DEFAULT}"
 EASY=0
 QUIET=0
 FROM_SOURCE=0
-LOCK_FILE="/tmp/csctm-install.lock"
+LOCK_FILE="/tmp/csctf-install.lock"
 VERIFY=0
 CHECKSUM_URL="${CHECKSUM_URL:-}"
 
@@ -29,9 +29,9 @@ Usage: install.sh [--version vX.Y.Z] [--dest DIR] [--system] [--from-source] [--
 Environment overrides:
   VERSION         Tag to install (defaults to latest release)
   OWNER           GitHub owner (default: Dicklesworthstone)
-  REPO            GitHub repo  (default: chatgpt_shared_conversation_to_markdown_file)
+  REPO            GitHub repo  (default: chat_shared_conversation_to_file)
   DEST            Install dir  (default: ~/.local/bin or /usr/local/bin with --system)
-  BINARY          Installed name (default: csctm)
+  BINARY          Installed name (default: csctf)
   CHECKSUM_URL    Override checksum URL (defaults to <binary>.sha256 next to artifact)
 EOFU
 }
@@ -103,11 +103,11 @@ detect_target() {
 
   ASSET=""
   case "${OS}-${ARCH}" in
-    linux-x86_64) ASSET="csctm-linux" ;;
+    linux-x86_64) ASSET="csctf-linux" ;;
     linux-aarch64) warn "No prebuilt binary for linux/aarch64; will build from source (requires git + bun)"; FROM_SOURCE=1 ;;
-    darwin-arm64) ASSET="csctm-macos" ;;
+    darwin-arm64) ASSET="csctf-macos" ;;
     darwin-x86_64) warn "No prebuilt binary for macOS Intel; will build from source (requires git + bun)"; FROM_SOURCE=1 ;;
-    msys*-*|mingw*-*|cygwin*-*) ASSET="csctm-windows.exe" ;;
+    msys*-*|mingw*-*|cygwin*-*) ASSET="csctf-windows.exe" ;;
     *) warn "Unknown platform ${OS}/${ARCH}; will build from source (requires git + bun)"; FROM_SOURCE=1 ;;
   esac
 }

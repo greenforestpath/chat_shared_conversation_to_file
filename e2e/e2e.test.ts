@@ -5,32 +5,32 @@ import os from "os";
 import path from "path";
 import { spawnSync } from "child_process";
 
-const RUN_E2E = process.env.CSCTM_E2E === "1";
+const RUN_E2E = process.env.CSCTF_E2E === "1";
 const SHARE_URL =
-  process.env.CSCTM_E2E_URL ?? "https://chatgpt.com/share/69343092-91ac-800b-996c-7552461b9b70";
+  process.env.CSCTF_E2E_URL ?? "https://chatgpt.com/share/69343092-91ac-800b-996c-7552461b9b70";
 const CLAUDE_URL =
-  process.env.CSCTM_E2E_CLAUDE_URL ?? "https://claude.ai/share/a957d022-c2f1-4efb-ac58-81395f4331fe";
+  process.env.CSCTF_E2E_CLAUDE_URL ?? "https://claude.ai/share/a957d022-c2f1-4efb-ac58-81395f4331fe";
 const GEMINI_URL =
-  process.env.CSCTM_E2E_GEMINI_URL ?? "https://gemini.google.com/share/66d944b0e6b9";
+  process.env.CSCTF_E2E_GEMINI_URL ?? "https://gemini.google.com/share/66d944b0e6b9";
 const GROK_URL =
-  process.env.CSCTM_E2E_GROK_URL ?? "https://grok.com/share/bGVnYWN5_d5329c61-f497-40b7-9472-c555fa71af9c";
+  process.env.CSCTF_E2E_GROK_URL ?? "https://grok.com/share/bGVnYWN5_d5329c61-f497-40b7-9472-c555fa71af9c";
 import { fileURLToPath } from "url";
 const ROOT = path.resolve(path.join(path.dirname(fileURLToPath(import.meta.url)), ".."));
-const BINARY = process.platform === "win32" ? "csctm.exe" : "csctm";
+const BINARY = process.platform === "win32" ? "csctf.exe" : "csctf";
 const BIN_PATH = path.join(ROOT, "dist", BINARY);
-const E2E_TIMEOUT_MS = process.env.CSCTM_E2E_TIMEOUT_MS ?? "60000";
+const E2E_TIMEOUT_MS = process.env.CSCTF_E2E_TIMEOUT_MS ?? "60000";
 
-const TEST_TIMEOUT_MS = Number.parseInt(process.env.CSCTM_E2E_TEST_TIMEOUT_MS ?? "120000", 10);
+const TEST_TIMEOUT_MS = Number.parseInt(process.env.CSCTF_E2E_TEST_TIMEOUT_MS ?? "120000", 10);
 const describeFn = RUN_E2E ? describe : describe.skip;
 const describeClaude = RUN_E2E ? describe : describe.skip;
 const describeGemini = RUN_E2E ? describe : describe.skip;
 const describeGrok = RUN_E2E ? describe : describe.skip;
 
-describeFn("csctm end-to-end", () => {
+describeFn("csctf end-to-end", () => {
   let tmpDir: string;
 
   beforeAll(() => {
-    tmpDir = mkdtempSync(path.join(os.tmpdir(), "csctm-e2e-"));
+    tmpDir = mkdtempSync(path.join(os.tmpdir(), "csctf-e2e-"));
     const cachePath =
       process.env.PLAYWRIGHT_BROWSERS_PATH ??
       (process.platform === "win32"
@@ -93,11 +93,11 @@ describeFn("csctm end-to-end", () => {
   }, TEST_TIMEOUT_MS);
 });
 
-describeClaude("csctm end-to-end (Claude share)", () => {
+describeClaude("csctf end-to-end (Claude share)", () => {
   let tmpDir: string;
 
   beforeAll(() => {
-    tmpDir = mkdtempSync(path.join(os.tmpdir(), "csctm-e2e-claude-"));
+    tmpDir = mkdtempSync(path.join(os.tmpdir(), "csctf-e2e-claude-"));
     const build = spawnSync("bun", ["run", "build"], {
       cwd: ROOT,
       stdio: "inherit"
@@ -146,11 +146,11 @@ describeClaude("csctm end-to-end (Claude share)", () => {
   }, TEST_TIMEOUT_MS);
 });
 
-describeGemini("csctm end-to-end (Gemini share)", () => {
+describeGemini("csctf end-to-end (Gemini share)", () => {
   let tmpDir: string;
 
   beforeAll(() => {
-    tmpDir = mkdtempSync(path.join(os.tmpdir(), "csctm-e2e-gemini-"));
+    tmpDir = mkdtempSync(path.join(os.tmpdir(), "csctf-e2e-gemini-"));
     const build = spawnSync("bun", ["run", "build"], {
       cwd: ROOT,
       stdio: "inherit"
@@ -199,11 +199,11 @@ describeGemini("csctm end-to-end (Gemini share)", () => {
   }, TEST_TIMEOUT_MS);
 });
 
-describeGrok("csctm end-to-end (Grok share)", () => {
+describeGrok("csctf end-to-end (Grok share)", () => {
   let tmpDir: string;
 
   beforeAll(() => {
-    tmpDir = mkdtempSync(path.join(os.tmpdir(), "csctm-e2e-grok-"));
+    tmpDir = mkdtempSync(path.join(os.tmpdir(), "csctf-e2e-grok-"));
     const build = spawnSync("bun", ["run", "build"], {
       cwd: ROOT,
       stdio: "inherit"

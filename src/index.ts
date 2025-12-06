@@ -73,6 +73,7 @@ type CliOptions = {
   quiet: boolean
   verbose: boolean
   format: 'both' | 'md' | 'html'
+  headless: boolean
   openAfter: boolean
   copy: boolean
   json: boolean
@@ -99,8 +100,8 @@ type ParsedArgs = CliOptions & { url: string }
 
 const DEFAULT_TIMEOUT_MS = 60_000
 const MAX_SLUG_LEN = 120
-const DEFAULT_GH_REPO = 'my_shared_chatgpt_conversations'
-const CONFIG_DIR = path.join(os.homedir(), '.config', 'csctm')
+const DEFAULT_GH_REPO = 'my_shared_conversations'
+const CONFIG_DIR = path.join(os.homedir(), '.config', 'csctf')
 const CONFIG_PATH = path.join(CONFIG_DIR, 'config.json')
 const UPDATE_CACHE_PATH = path.join(CONFIG_DIR, 'last-update.json')
 const CLIP_HELP =
@@ -234,8 +235,8 @@ async function resolveGitHubToken(): Promise<string> {
   const trimmed = token.trim()
   if (!trimmed) throw new Error('Empty token provided.')
   const looksLikePat = /^gh[pous]_[A-Za-z0-9_]{20,}|^github_pat_[A-Za-z0-9_]{20,}/.test(trimmed)
-  if (!looksLikePat && !process.env.CSCTM_ALLOW_NONSTANDARD_TOKEN) {
-    throw new Error('GITHUB_TOKEN does not look like a GitHub PAT (set CSCTM_ALLOW_NONSTANDARD_TOKEN=1 to override).')
+  if (!looksLikePat && !process.env.CSCTF_ALLOW_NONSTANDARD_TOKEN) {
+    throw new Error('GITHUB_TOKEN does not look like a GitHub PAT (set CSCTF_ALLOW_NONSTANDARD_TOKEN=1 to override).')
   }
   // best-effort zeroization of the mutable buffer
   if (token.length) {
@@ -497,8 +498,12 @@ export function renderHtmlDocument(markdown: string, title: string, source: stri
         const { value } = hljs.highlight(code, { language: lang, ignoreIllegals: true })
         return `<div class="code-block"><div class="code-lang">${lang}</div><pre><code class="hljs language-${lang}">${value}</code></pre></div>`
       }
-      const escaped = md.utils.escapeHtml(code)
-      return `<div class="code-block"><pre><code class="hljs">${escaped}</code></pre></div>`
+      const auto = hljs.highlightAuto(code)
+      const detected = auto.language || 'text'
+      const value = auto.value || md.utils.escapeHtml(code)
+      const badge = detected ? `<div class="code-lang">${detected}</div>` : ''
+      const langClass = detected ? ` language-${detected}` : ''
+      return `<div class="code-block">${badge}<pre><code class="hljs${langClass}">${value}</code></pre></div>`
     }
   })
 
@@ -591,6 +596,7 @@ function parseArgs(args: string[]): ParsedArgs {
   let quiet = false
   let verbose = false
   let format: 'both' | 'md' | 'html' = 'both'
+  let headless = true
   let openAfter = false
   let copy = false
   let json = false
@@ -609,7 +615,7 @@ function parseArgs(args: string[]): ParsedArgs {
   let yes = false
   let ghPagesRepo: string | undefined
   let ghPagesBranch = 'gh-pages'
-  let ghPagesDir = 'csctm'
+  let ghPagesDir = 'csctf'
   let autoInstallGh = false
 
   for (let i = 0; i < args.length; i += 1) {
@@ -628,6 +634,12 @@ function parseArgs(args: string[]): ParsedArgs {
       case '--output-dir':
         outputDir = args[i + 1]
         i += 1
+        break
+      case '--headful':
+        headless = false
+        break
+      case '--headless':
+        headless = true
         break
       case '--quiet':
         quiet = true
@@ -749,6 +761,7 @@ function parseArgs(args: string[]): ParsedArgs {
     quiet,
     verbose,
     format,
+    headless,
     openAfter,
     copy,
     json,
@@ -821,23 +834,24 @@ const DONE = (quiet: boolean) => (msg: string, elapsedMs?: number) => {
 function usage(): void {
   console.log(
     [
-      `Usage: csctm <chatgpt|claude|gemini|grok-share-url>`,
+      `Usage: csctf <chatgpt|claude|gemini|grok-share-url>`,
       `  [--timeout-ms 60000] [--outfile path|--output-dir dir] [--quiet] [--verbose] [--format both|md|html]`,
+      `  [--headful|--headless]`,
       `  [--open] [--copy] [--json] [--title "Custom Title"] [--wait-for-selector "<css>"] [--debug]`,
       `  [--check-updates|--no-check-updates] [--version] [--no-html] [--html-only] [--md-only]`,
       `  [--gh-pages-repo owner/name] [--gh-pages-branch gh-pages] [--gh-pages-dir dir]`,
       `  [--remember] [--forget-gh-pages] [--dry-run] [--yes] [--help] [--gh-install]`,
       '',
       'Common recipes:',
-      `  Basic scrape (ChatGPT):   csctm https://chatgpt.com/share/<id>`,
-      `  Basic scrape (Claude):    csctm https://claude.ai/share/<id>`,
-      `  Basic scrape (Gemini):    csctm https://gemini.google.com/share/<id>`,
-      `  Basic scrape (Grok):      csctm https://grok.com/share/<id>`,
-      `  Longer timeout:           csctm <url> --timeout-ms 90000`,
-      `  Markdown only:            csctm <url> --md-only`,
-      `  HTML only:                csctm <url> --html-only`,
-      `  Publish (public):         GITHUB_TOKEN=... csctm <url> --gh-pages-repo owner/name --yes`,
-      `  Remember GH settings:     csctm <url> --gh-pages-repo owner/name --remember --yes`,
+      `  Basic scrape (ChatGPT):   csctf https://chatgpt.com/share/<id>`,
+      `  Basic scrape (Claude):    csctf https://claude.ai/share/<id>`,
+      `  Basic scrape (Gemini):    csctf https://gemini.google.com/share/<id>`,
+      `  Basic scrape (Grok):      csctf https://grok.com/share/<id>`,
+      `  HTML only:                csctf <url> --html-only`,
+      `  Markdown only:            csctf <url> --md-only`,
+      `  Longer timeout:           csctf <url> --timeout-ms 90000`,
+      `  Publish (public):         GITHUB_TOKEN=... csctf <url> --gh-pages-repo owner/name --yes`,
+      `  Remember GH settings:     csctf <url> --gh-pages-repo owner/name --remember --yes`,
       ''
     ].join('\n')
   )
@@ -889,6 +903,46 @@ function buildTurndown(): TurndownService {
     replacement: () => '\n'
   })
 
+  // Block-level code (handles non-pre code containers like Grok's code-blocks).
+  td.addRule('fencedCodeFallback', {
+    filter: (node: HTMLElement) => {
+      if (node.nodeName !== 'CODE') return false
+      const text = node.textContent ?? ''
+      const isBlocky =
+        text.includes('\n') ||
+        (text.length > 120 && /\s{2,}/.test(text)) ||
+        (node.parentElement?.getAttribute('data-testid')?.includes('code-block') ?? false) ||
+        (node.parentElement?.className ?? '').toLowerCase().includes('code-block')
+      return isBlocky
+    },
+    replacement: (content: string) => {
+      let codeText = (content || '').replace(/\u00a0/g, ' ').trimEnd()
+      if (!codeText.includes('\n') && /\s{2,}/.test(codeText)) {
+        codeText = codeText.replace(/\s{2,}/g, '\n')
+      }
+      const maxTicks = (codeText.match(/`+/g) || []).reduce((a, b) => Math.max(a, b.length), 0)
+      const fence = '`'.repeat(Math.max(3, maxTicks + 1))
+      return `\n\n${fence}\n${codeText}\n${fence}\n\n`
+    }
+  })
+
+  // Table rendering to Markdown (simple pipe tables).
+  td.addRule('tables', {
+    filter: 'table',
+    replacement: (_content: string, node: HTMLElement) => {
+      const rows = Array.from(node.querySelectorAll('tr')).map(tr =>
+        Array.from(tr.querySelectorAll('th,td')).map(cell => (cell.textContent ?? '').trim().replace(/\s+/g, ' '))
+      )
+      if (!rows.length) return '\n'
+      const header = rows[0]
+      const body = rows.slice(1)
+      const headerLine = `| ${header.join(' | ')} |`
+      const separator = `| ${header.map(() => '---').join(' | ')} |`
+      const bodyLines = body.map(r => `| ${r.join(' | ')} |`)
+      return `\n\n${headerLine}\n${separator}\n${bodyLines.join('\n')}\n\n`
+    }
+  })
+
   const codeRule: Rule = {
     filter: (node: HTMLElement) => node.nodeName === 'PRE' && node.firstElementChild?.nodeName === 'CODE',
     replacement: (_content: string, node: HTMLElement) => {
@@ -917,8 +971,7 @@ function buildTurndown(): TurndownService {
 }
 
 async function checkForUpdates(currentVersion: string, quiet: boolean): Promise<void> {
-  const latestUrl =
-    'https://api.github.com/repos/Dicklesworthstone/chatgpt_shared_conversation_to_markdown_file/releases/latest'
+  const latestUrl = 'https://api.github.com/repos/Dicklesworthstone/chat_shared_conversation_to_file/releases/latest'
   try {
     if (fs.existsSync(UPDATE_CACHE_PATH)) {
       const raw = fs.readFileSync(UPDATE_CACHE_PATH, 'utf8')
@@ -945,7 +998,7 @@ async function checkForUpdates(currentVersion: string, quiet: boolean): Promise<
     const res = await fetch(latestUrl, {
       headers: {
         Accept: 'application/vnd.github+json',
-        'User-Agent': `csctm/${currentVersion}`
+        'User-Agent': `csctf/${currentVersion}`
       }
     })
     if (!res.ok) {
@@ -1101,7 +1154,7 @@ function resolveRepoUrl(input: string): { repo: string; url: string } {
   return { repo: input, url: `https://github.com/${input}.git` }
 }
 
-function renderIndex(manifest: PublishHistoryItem[], title = 'csctm exports'): string {
+function renderIndex(manifest: PublishHistoryItem[], title = 'csctf exports'): string {
   const cards = manifest
     .map(item => {
       const mdLink = item.md ? `<a href="./${encodeURIComponent(item.md)}">Markdown</a>` : ''
@@ -1166,7 +1219,7 @@ export async function publishToGhPages(opts: PublishOpts): Promise<AppConfig> {
 
   if (dryRun) {
     try {
-      tmp = fs.mkdtempSync(path.join(fs.realpathSync(osTmpDir()), 'csctm-ghp-dry-'))
+      tmp = fs.mkdtempSync(path.join(fs.realpathSync(osTmpDir()), 'csctf-ghp-dry-'))
       const targetDir = path.join(tmp, dir)
       fs.mkdirSync(targetDir, { recursive: true })
       const manifest: PublishHistoryItem[] = []
@@ -1194,7 +1247,7 @@ export async function publishToGhPages(opts: PublishOpts): Promise<AppConfig> {
 
   const { repo: repoName, url } = resolveRepoUrl(repo)
   const cleanUrl = url.replace(/https:\/\/[^@]+@/, 'https://')
-  tmp = fs.mkdtempSync(path.join(fs.realpathSync(osTmpDir()), 'csctm-ghp-'))
+  tmp = fs.mkdtempSync(path.join(fs.realpathSync(osTmpDir()), 'csctf-ghp-'))
 
   const gitEnv = { ...process.env, GIT_TERMINAL_PROMPT: '0' }
   const safeRun = (args: string[]) => {
@@ -1209,8 +1262,8 @@ export async function publishToGhPages(opts: PublishOpts): Promise<AppConfig> {
   }
 
   // Configure identity for headless/CI
-  safeRun(['config', 'user.email', 'bot@csctm.local'])
-  safeRun(['config', 'user.name', 'csctm'])
+  safeRun(['config', 'user.email', 'bot@csctf.local'])
+  safeRun(['config', 'user.name', 'csctf'])
 
   // Use extraHeader for auth to avoid token-in-URL exposure
   const authHeader = `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString('base64')}`
@@ -1342,7 +1395,7 @@ export async function publishToGhPages(opts: PublishOpts): Promise<AppConfig> {
   const status = spawnSync('git', ['status', '--porcelain'], { cwd: tmp, encoding: 'utf8' })
   if (status.stdout.trim().length === 0) return config
   logProgress('Committing...')
-  safeRun(['commit', '-m', `Add csctm export: ${entry.title.slice(0, 60)}`])
+  safeRun(['commit', '-m', `Add csctf export: ${entry.title.slice(0, 60)}`])
   logProgress('Pushing...')
   const pushStatus = gitWithRetry(['push', 'origin', branch], 'push')
   if (pushStatus !== 0) {
@@ -1388,7 +1441,7 @@ async function scrape(
   url: string,
   timeoutMs: number,
   provider: Provider,
-  opts: { waitForSelector?: string; debug?: boolean }
+  opts: { waitForSelector?: string; debug?: boolean; headless: boolean }
 ): Promise<{ title: string; markdown: string; retrievedAt: string }> {
   const td = buildTurndown()
   let browser: Browser | null = null
@@ -1397,7 +1450,7 @@ async function scrape(
     if (!opts.debug || !page) return null
     try {
       const html = await page.content()
-      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'csctm-debug-'))
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'csctf-debug-'))
       const file = path.join(dir, 'page.html')
       fs.writeFileSync(file, html, 'utf8')
       return file
@@ -1407,10 +1460,28 @@ async function scrape(
   }
 
   try {
-    browser = await chromium.launch({ headless: true })
+    browser = await chromium.launch({
+      headless: opts.headless,
+      args: [
+        '--disable-blink-features=AutomationControlled',
+        '--disable-features=IsolateOrigins,site-per-process',
+        '--disable-site-isolation-trials'
+      ],
+      ignoreDefaultArgs: ['--enable-automation']
+    })
     page = await browser.newPage({
       userAgent:
         'Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36'
+    })
+    await page.addInitScript(() => {
+      // Basic stealth to reduce bot-detection/CF challenges.
+      Object.defineProperty(navigator, 'webdriver', { get: () => undefined })
+      Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] })
+      Object.defineProperty(navigator, 'platform', { get: () => 'MacIntel' })
+      Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] })
+      Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 })
+      // @ts-expect-error
+      window.chrome = { runtime: {} }
     })
     if (!page) throw new Error('Failed to create browser page.')
 
@@ -1482,7 +1553,7 @@ async function scrape(
       opts.waitForSelector && opts.waitForSelector.trim().length > 0
         ? [[opts.waitForSelector]]
         : PROVIDER_SELECTOR_CANDIDATES[provider] ?? PROVIDER_SELECTOR_CANDIDATES.chatgpt
-    const messages = (await page.evaluate((groups: string[][]) => {
+    let messages = (await page.evaluate((groups: string[][]) => {
       const cleanHtml = (el: Element): string => {
         const clone = el.cloneNode(true) as HTMLElement
         const garbage = clone.querySelectorAll(
@@ -1522,9 +1593,20 @@ async function scrape(
           const shadow = (node as HTMLElement & { shadowRoot?: ShadowRoot }).shadowRoot
           const shadowHtml = shadow ? shadow.innerHTML : ''
           const shadowText = shadow ? shadow.textContent ?? '' : ''
-          const html = (shadowHtml || cleanHtml(el) || '').trim()
-          const text = (shadowText || el.textContent || '').trim()
+          const normalizeNbsp = (val: string) => val.replace(/\u00a0/g, ' ').replace(/&nbsp;/gi, ' ')
+          let html = normalizeNbsp((shadowHtml || cleanHtml(el) || '').trim())
+          const text = normalizeNbsp((shadowText || el.textContent || '').trim())
           if (!html && !text) return null
+
+          const classLower = (el.getAttribute('class') ?? '').toLowerCase()
+          const dataTestId = (el.getAttribute('data-testid') ?? '').toLowerCase()
+          // If this looks like a code block container, wrap text as fenced pre.
+          if (classLower.includes('code-block') || dataTestId.includes('code-block')) {
+            let codeText = (shadowText || el.textContent || '').replace(/\u00a0/g, ' ').trimEnd()
+            // Heuristic: Grok code blocks often have lines concatenated with extra spaces; split on 2+ spaces.
+            codeText = codeText.replace(/\s{2,}/g, '\n').replace(/\n{3,}/g, '\n\n')
+            html = `<pre><code>${codeText}</code></pre>`
+          }
 
           const attrRole =
             el.getAttribute('data-message-author-role') ??
@@ -1555,6 +1637,16 @@ async function scrape(
         })
         .filter((m): m is { role: MessageRole; html: string } => Boolean(m))
     }, selectorGroups)) as ScrapedMessage[]
+
+    if (provider === 'grok' || provider === 'gemini' || provider === 'claude') {
+      let unknownIdx = 0
+      messages = messages.map(m => {
+        if (m.role !== 'unknown') return m
+        const role: MessageRole = unknownIdx % 2 === 0 ? 'user' : 'assistant'
+        unknownIdx += 1
+        return { ...m, role }
+      })
+    }
 
     if (!messages.length) {
       const dumpPath = await dumpDebug()
@@ -1589,8 +1681,13 @@ async function scrape(
           : 'Other'
       lines.push(`## ${prettyRole}`)
       lines.push('')
-      const htmlForTd = msg.html.replace(/<(?:br\s*\/?|\/p|\/div|\/section|\/article)>/gi, '$&\n')
+      const normalizeNbsp = (val: string) => val.replace(/\u00a0/g, ' ').replace(/&nbsp;/gi, ' ')
+      const htmlForTd = normalizeNbsp(msg.html).replace(/<(?:br\s*\/?|\/p|\/div|\/section|\/article)>/gi, '$&\n')
       let markdown = td.turndown(htmlForTd)
+      markdown = markdown
+        .split('\n')
+        .filter(line => line.trim() !== 'text')
+        .join('\n')
       markdown = markdown.replace(/\n{3,}/g, '\n\n').trim()
       lines.push(markdown)
       lines.push('')
@@ -1626,6 +1723,7 @@ async function main(): Promise<void> {
     quiet,
     verbose,
     format,
+    headless,
     openAfter,
     copy,
     json,
@@ -1653,7 +1751,7 @@ async function main(): Promise<void> {
   const done = DONE(quiet)
 
   if (versionOnly) {
-    console.log(`csctm v${pkg.version}`)
+    console.log(`csctf v${pkg.version}`)
     return
   }
 
@@ -1675,6 +1773,7 @@ async function main(): Promise<void> {
     process.exit(1)
   }
   const provider = detectProvider(url)
+  const effectiveHeadless = headless === false ? false : provider === 'claude' ? false : true
 
   if (forgetGh) {
     forgetGhConfig()
@@ -1696,7 +1795,7 @@ async function main(): Promise<void> {
 
   const ghRepoResolved = ghPagesRepo ?? config.gh?.repo ?? DEFAULT_GH_REPO
   const ghBranchResolved = ghPagesBranch || config.gh?.branch || 'gh-pages'
-  const ghDirResolved = (ghPagesDir ?? config.gh?.dir ?? 'csctm').trim() || 'csctm'
+  const ghDirResolved = (ghPagesDir ?? config.gh?.dir ?? 'csctf').trim() || 'csctf'
   const hasStoredGh = Boolean(config.gh)
   const hasExplicitRepo = Boolean(ghPagesRepo)
   const shouldPublish = hasExplicitRepo || hasStoredGh
@@ -1717,7 +1816,8 @@ async function main(): Promise<void> {
     const endOpen = step(idx++, totalSteps, 'Opening share link')
     const { title, markdown, retrievedAt } = await scrape(url, timeoutMs, provider, {
       waitForSelector,
-      debug
+      debug,
+      headless: effectiveHeadless
     })
     endLaunch()
     endOpen()

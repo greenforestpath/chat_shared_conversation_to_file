@@ -42,7 +42,7 @@ describe("renderHtmlDocument", () => {
 
 describe("publishToGhPages (dry run)", () => {
   it("generates manifest and index without pushing", async () => {
-    const tmp = mkdtempSync(path.join(os.tmpdir(), "csctm-ghp-dry-"));
+    const tmp = mkdtempSync(path.join(os.tmpdir(), "csctf-ghp-dry-"));
     const mdPath = path.join(tmp, "sample.md");
     const htmlPath = path.join(tmp, "sample.html");
     writeFileSync(mdPath, "# Test\n", "utf8");
@@ -71,7 +71,7 @@ describe("publishToGhPages (dry run)", () => {
 
 describe("uniquePath", () => {
   it("returns a non-conflicting path by incrementing suffixes", () => {
-    const tmp = mkdtempSync(path.join(os.tmpdir(), "csctm-slug-"));
+    const tmp = mkdtempSync(path.join(os.tmpdir(), "csctf-slug-"));
     const first = path.join(tmp, "file.md");
     writeFileSync(first, "one", "utf8");
     const second = uniquePath(first);

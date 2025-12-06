@@ -1,16 +1,16 @@
-# csctm — ChatGPT Shared Conversation → Markdown
+# csctf — Chat Shared Conversation → File
 
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-blue)
 ![Runtime](https://img.shields.io/badge/runtime-Bun%201.3+-purple)
 ![Status](https://img.shields.io/badge/status-alpha-orange)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-Single-file Bun-native CLI that downloads a ChatGPT share link (or share links from Claude, Gemini, and Grok) and saves a clean Markdown transcript with fenced code blocks, stable filenames, and rich terminal output.
+Single-file Bun-native CLI that turns public ChatGPT, Claude, Gemini, or Grok share links into clean Markdown + HTML transcripts with preserved code fences, stable filenames, and rich terminal output.
 
 <div align="center">
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/chatgpt_shared_conversation_to_markdown_file/main/install.sh \
+curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/chat_shared_conversation_to_file/main/install.sh \
   | bash
 ```
 
@@ -20,14 +20,14 @@ curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/chatgpt_shared_co
 
 ## ✨ Highlights
 - **Zero-setup binaries**: Installer prefers published release binaries per-OS; falls back to Bun source build automatically.
-- **Accurate Markdown**: Preserves fenced code blocks with detected language, strips citation pills, normalizes whitespace and line terminators.
+- **Accurate Markdown + HTML**: Preserves fenced code blocks with detected language, strips citation pills, normalizes whitespace and line terminators, and renders a styled HTML twin.
 - **Deterministic filenames**: Slugifies the conversation title and auto-increments to avoid clobbering existing files.
 - **Readable progress**: Colorized, step-based console output powered by `chalk`.
 - **Multi-provider**: Works with public shares from ChatGPT (`chatgpt.com/share`), Claude (`claude.ai/share`), Gemini (`gemini.google.com/share`), and Grok (`grok.com/share`).
 
-## 💡 Why csctm exists
-- Copy/pasting ChatGPT shares often breaks fenced code blocks, loses language hints, and produces messy filenames. csctm fixes that with stable slugs, language-preserving fences, and collision-proof outputs.
-- Exports a static HTML twin (no JS) for easy hosting/archiving, alongside Markdown with normalized whitespace and cleaned citations.
+## 💡 Why csctf exists
+- Copy/pasting AI share links often breaks fenced code blocks, loses language hints, and produces messy filenames. csctf fixes that with stable slugs, language-preserving fences, and collision-proof outputs.
+- Exports both Markdown and a static HTML twin (no JS) for easy hosting/archiving, with normalized whitespace and cleaned citations.
 - Optional GitHub Pages publishing turns a single command into a shareable, indexed microsite.
 
 ## 🧭 Design principles
@@ -58,7 +58,7 @@ curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/chatgpt_shared_co
 - Network: only the share URL plus optional update check; publish uses git/gh over HTTPS. No other calls.  
 - Tokens: only `GITHUB_TOKEN`; never stored; confirmation gate unless `--yes`.  
 - HTML output: no JS, inline styles only; removes citation pills and data-start/end attributes; highlight.js used in a static way.  
-- Filesystem: temp+rename write pattern; collision-proof naming; config stored under `~/.config/csctm/config.json` (GH settings/history).
+- Filesystem: temp+rename write pattern; collision-proof naming; config stored under `~/.config/csctf/config.json` (GH settings/history).
 
 ## 🏎️ Performance profile
 - First run: pays Playwright Chromium download; cached thereafter.  
@@ -75,19 +75,19 @@ curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/chatgpt_shared_co
 
 ## 📚 Recipes (more examples)
 - Quiet CI scrape (MD only):  
-  `csctm <url> --md-only --quiet --outfile /tmp/chat.md`
+  `csctf <url> --md-only --quiet --outfile /tmp/chat.md`
 - HTML-only for embedding:  
-  `csctm <url> --html-only --outfile site/chat.html`
+  `csctf <url> --html-only --outfile site/chat.html`
 - Publish with remembered settings:  
-  `csctm <url> --gh-pages-repo you/repo --remember --yes`
+  `csctf <url> --gh-pages-repo you/repo --remember --yes`
 - Custom browser cache:  
-  `PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright csctm <url>`
+  `PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright csctf <url>`
 - Longer/slower shares:  
-  `csctm <url> --timeout-ms 90000`
+  `csctf <url> --timeout-ms 90000`
 
 ## 🛠️ Internals for contributors
 - CLI entry + flow: `src/index.ts` (arg parsing, scrape, render, publish).  
-- Tests: `bun test` (unit), `CSCTM_E2E=1 bun run test:e2e` (full scrape/build/publish assertions).  
+- Tests: `bun test` (unit), `CSCTF_E2E=1 bun run test:e2e` (full scrape/build/publish assertions).  
 - Build: `bun run build[:target]` emits single-file binaries in `dist/`.  
 - Lint/typecheck: `bun run lint`, `bun run typecheck`.  
 - Installer: `install.sh` prefers release binaries; falls back to Bun build with git+bun.
@@ -95,28 +95,29 @@ curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/chatgpt_shared_co
 ## ⚡ Quickstart
 - macOS/Linux:
   ```bash
-  curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/chatgpt_shared_conversation_to_markdown_file/main/install.sh | bash
-  csctm https://chatgpt.com/share/69343092-91ac-800b-996c-7552461b9b70
+  curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/chat_shared_conversation_to_file/main/install.sh | bash
+  csctf https://chatgpt.com/share/69343092-91ac-800b-996c-7552461b9b70
   ```
 - Windows: run the installer via Git Bash or WSL (native Windows binary also produced in `dist/`).
 - First run downloads Playwright Chromium; cache is typically `~/.cache/ms-playwright` (Linux/macOS) or `%USERPROFILE%\AppData\Local\ms-playwright` (Windows).
 
 ## 🧭 Usage
 ```bash
-csctm <chatgpt-share-url> \
+csctf <share-url> \
   [--timeout-ms 60000] [--outfile path] [--quiet] [--check-updates] [--version] \
   [--no-html] [--html-only] [--md-only] \
-  [--gh-pages-repo owner/name] [--gh-pages-branch gh-pages] [--gh-pages-dir csctm] \
+  [--gh-pages-repo owner/name] [--gh-pages-branch gh-pages] [--gh-pages-dir csctf] \
   [--remember] [--forget-gh-pages] [--dry-run] [--yes] [--gh-install]
 
-csctm https://chatgpt.com/share/69343092-91ac-800b-996c-7552461b9b70 --timeout-ms 90000
+csctf https://chatgpt.com/share/69343092-91ac-800b-996c-7552461b9b70 --timeout-ms 90000
 ```
+Swap in Claude, Gemini, or Grok share URLs—flow is identical.
 
 What you’ll see:
 - Headless Chromium launch (first run downloads the Playwright bundle).
 - `✔ Saved <file>.md` plus the absolute path; an HTML twin (`.html`) is also written by default. Use `--no-html` to skip.
-- (Optional) Publish to GitHub Pages with `--gh-pages-repo <owner/name>` (defaults to remembered repo or `my_shared_chatgpt_conversations`). Confirm by typing `PROCEED` unless you pass `--yes`. Use `--remember` to persist repo/branch/dir; `--forget-gh-pages` to clear; `--dry-run` to simulate.
-- (Optional) Publish HTML/MD to GitHub Pages via `--gh-pages-repo <repo> [--gh-pages-branch gh-pages] [--gh-pages-dir csctm]` with `GITHUB_TOKEN` set.
+- (Optional) Publish to GitHub Pages with `--gh-pages-repo <owner/name>` (defaults to remembered repo or `my_shared_conversations`). Confirm by typing `PROCEED` unless you pass `--yes`. Use `--remember` to persist repo/branch/dir; `--forget-gh-pages` to clear; `--dry-run` to simulate.
+- (Optional) Publish HTML/MD to GitHub Pages via `--gh-pages-repo <repo> [--gh-pages-branch gh-pages] [--gh-pages-dir csctf]` with `GITHUB_TOKEN` set.
 - Also works with Claude, Gemini, and Grok share links (public).
 
 ## 📋 Flags at a glance
@@ -128,22 +129,22 @@ What you’ll see:
 | `--quiet` | verbose | Minimal logging | Errors still print. |
 | `--check-updates` | off | Print latest release tag | No network otherwise. |
 | `--version` | off | Print version and exit | |
-| `--gh-pages-repo` | remembered / `my_shared_chatgpt_conversations` | Target repo for publish | Requires `GITHUB_TOKEN`. |
+| `--gh-pages-repo` | remembered / `my_shared_conversations` | Target repo for publish | Requires `GITHUB_TOKEN`. |
 | `--gh-pages-branch` | `gh-pages` | Publish branch | Created if missing. |
-| `--gh-pages-dir` | `csctm` | Subdirectory in repo | Keeps exports isolated. |
-| `--remember` / `--forget-gh-pages` | off | Persist/clear GH config | Stored under `~/.config/csctm/config.json`. |
+| `--gh-pages-dir` | `csctf` | Subdirectory in repo | Keeps exports isolated. |
+| `--remember` / `--forget-gh-pages` | off | Persist/clear GH config | Stored under `~/.config/csctf/config.json`. |
 | `--dry-run` | off | Build index without push | Skips commit/push. |
 | `--yes` / `--no-confirm` | off | Skip `PROCEED` prompt | Use in CI or scripted runs. |
 | `--gh-install` | off | Auto-install `gh` | Tries brew/apt/dnf/yum/winget/choco. |
 
 ## 🗂️ Outputs
-- Markdown header: `# ChatGPT Conversation: <title>`, plus `Source` and `Retrieved` lines.
+- Markdown header: `# Conversation: <title>`, plus `Source` and `Retrieved` lines.
 - Per message: `## User` / `## Assistant`, fenced code with language preserved when present.
 - Filenames: titles are slugified (non-alphanumerics → `_`, trimmed, max 120 chars, Windows reserved names suffixed), collisions auto-suffix `_2`, `_3`, etc.
 - HTML twin: standalone, zero-JS, inline CSS + highlight.js theme, light/dark (prefers-color-scheme), language badges on code blocks, TOC, metadata pills, print-friendly tweaks. Shares the base name with `.md`.
 
 ## 🔒 Security & network behavior
-- Network calls: only the ChatGPT share URL, plus optional `--check-updates` and GitHub publish flows.
+- Network calls: only the share URL, plus optional `--check-updates` and GitHub publish flows.
 - Tokens: only `GITHUB_TOKEN` is read (for publishing). No tokens are stored.
 - Headless-only for speed/determinism; Chromium downloaded once and cached.
 
@@ -155,10 +156,10 @@ What you’ll see:
 
 ## 🌐 GitHub Pages quick recipe
 ```bash
-GITHUB_TOKEN=... csctm <share-url> \
-  --gh-pages-repo youruser/my_shared_chatgpt_conversations \
+GITHUB_TOKEN=... csctf <share-url> \
+  --gh-pages-repo youruser/my_shared_conversations \
   --gh-pages-branch gh-pages \
-  --gh-pages-dir csctm \
+  --gh-pages-dir csctf \
   --yes
 ```
 - Without `--yes`, you must type `PROCEED`. Use `--remember` to persist repo/branch/dir; `--forget-gh-pages` to clear. `--dry-run` clones/builds the index but skips commit/push.
@@ -176,7 +177,7 @@ GITHUB_TOKEN=... csctm <share-url> \
 ## 🛠️ Local build & dev
 ```bash
 bun install
-bun run build                 # dist/csctm for current platform
+bun run build                 # dist/csctf for current platform
 
 # Dev helpers
 bun run lint                  # eslint
@@ -188,7 +189,7 @@ bun run build:mac-arm64
 bun run build:mac-x64
 bun run build:linux-x64
 bun run build:linux-arm64
-bun run build:windows-x64     # dist/csctm-windows-x64.exe
+bun run build:windows-x64     # dist/csctf-windows-x64.exe
 bun run build:all
 ```
 
@@ -202,14 +203,14 @@ bun run build:all
 - Unit: `bun test` (includes slugify/html render/unique-path checks).
 - E2E (networked, builds binary, hits the shared URL):
   ```bash
-  CSCTM_E2E=1 bun run test:e2e
+  CSCTF_E2E=1 bun run test:e2e
   ```
 - What E2E checks: exit code 0, `.md` + `.html` exist, minimum length/lines, correct headers/source URL, balanced fences, sanitized HTML (no `<script>`), normalized newlines.
 - Additional defaults are baked in for provider E2Es:
   - Claude: `https://claude.ai/share/a957d022-c2f1-4efb-ac58-81395f4331fe`
   - Gemini: `https://gemini.google.com/share/66d944b0e6b9`
   - Grok: `https://grok.com/share/bGVnYWN5_d5329c61-f497-40b7-9472-c555fa71af9c`
-  Set `CSCTM_E2E_CLAUDE_URL`, `CSCTM_E2E_GEMINI_URL`, or `CSCTM_E2E_GROK_URL` to override.
+  Set `CSCTF_E2E_CLAUDE_URL`, `CSCTF_E2E_GEMINI_URL`, or `CSCTF_E2E_GROK_URL` to override.
 
 ## 🧭 Examples (outputs)
 - Example input: `https://chatgpt.com/share/69343092-91ac-800b-996c-7552461b9b70`
@@ -264,7 +265,7 @@ bun run build:all
 - **Can I reduce console output?** `--quiet` minimizes progress logs; errors still print.
 - **Can I verify downloads?** The installer fetches adjacent `.sha256` files when present; use `--verify` to require a checksum.
 - **Can I change the user agent or selectors?** Edit `src/index.ts` (`chromium.launch` options and `page.waitForSelector` target) and rebuild.
-- **How do I verify installs?** Run `csctm --help` and invoke the bundled E2E: `CSCTM_E2E=1 bun run test:e2e` (network + browser download required).
+- **How do I verify installs?** Run `csctf --help` and invoke the bundled E2E: `CSCTF_E2E=1 bun run test:e2e` (network + browser download required).
 - **Which Markdown rules are customized?** A turndown rule injects fenced code blocks with detected language from `class="language-..."`; citation pills and data-start/end attributes are stripped.
 
 ## 📜 License
