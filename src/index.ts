@@ -629,10 +629,17 @@ export function renderHtmlDocument(markdown: string, title: string, source: stri
     return self.renderToken(tokens, idx, opts)
   }
 
-  // Strip any stray script tags to avoid runtime fetches/404s in exported HTML.
-  const safeMarkdown = markdown.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+  // Escape script/style tags so code examples render visibly without executing or being stripped.
+  const escapeExecutableTags = (html: string): string =>
+    html
+      .replace(/<script/gi, '&lt;script')
+      .replace(/<\/script>/gi, '&lt;/script&gt;')
+      .replace(/<style/gi, '&lt;style')
+      .replace(/<\/style>/gi, '&lt;/style&gt;')
+
+  const safeMarkdown = escapeExecutableTags(markdown)
   const rendered = md.render(safeMarkdown)
-  const body = rendered.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+  const body = escapeExecutableTags(rendered)
   const safeTitle = escapeHtml(stripProviderPrefix(title))
   const safeSource = escapeHtml(source)
   const safeRetrieved = escapeHtml(retrieved)
