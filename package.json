@@ -1,6 +1,6 @@
 {
   "name": "chat-shared-conversation-to-file",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "description": "CLI to download public share links (ChatGPT/Gemini/Grok) and save clean Markdown + HTML transcripts.",
   "license": "MIT",
   "bin": {
@@ -8,6 +8,7 @@
   },
   "type": "module",
   "scripts": {
+    "postinstall": "bun scripts/patch-playwright.js",
     "build": "bun build src/index.ts --compile --outfile dist/csctf --external electron --external chromium-bidi/lib/cjs/bidiMapper/BidiMapper --external chromium-bidi/lib/cjs/cdp/CdpConnection",
     "build:mac-arm64": "bun build src/index.ts --compile --target=bun-darwin-arm64 --outfile dist/csctf-macos-arm64 --external electron --external chromium-bidi/lib/cjs/bidiMapper/BidiMapper --external chromium-bidi/lib/cjs/cdp/CdpConnection",
     "build:mac-x64": "bun build src/index.ts --compile --target=bun-darwin-x64 --outfile dist/csctf-macos-x64 --external electron --external chromium-bidi/lib/cjs/bidiMapper/BidiMapper --external chromium-bidi/lib/cjs/cdp/CdpConnection",
