@@ -1094,13 +1094,34 @@ async function scrape(
       .split('\n')
       .filter(line => {
         const t = line.trim()
-        if (t.toLowerCase() === 'copy code') return false
-        if (t === 'text') return false
+        if (!t) return false
+        const lower = t.toLowerCase()
+        if (lower === 'copy code' || lower === 'copy') return false
+        if (lower === 'text') return false
         return true
       })
       .join('\n')
-    // Remove inlined badge-like tokens such as "+2GitHub+2"
-    markdown = markdown.replace(/\s*\+\d+[A-Za-z0-9_-]+(?:\+\d+)?/g, '')
+    // Remove inlined badge-like tokens such as "+2GitHub+2", "+4RCSB", "+4Genome.jp", etc.
+    markdown = markdown.replace(/\s*\+\d+[^\s]+/g, '')
+    markdown = markdown.replace(/\+\d+\b/g, '')
+    // Squash repeated punctuation left behind by removals.
+    markdown = markdown.replace(/\.{2,}/g, '.')
+    markdown = markdown.replace(/ {2,}/g, ' ')
+    // Drop lingering reference tokens.
+    markdown = markdown.replace(/:contentReference\[[^\]]+\]\{index=\d+\}/g, '')
+    // Collapse duplicated adjacent words (e.g., "PDB PDB").
+    markdown = markdown.replace(/\b(\w+)\s+\1\b/gi, '$1')
+    // Remove stray "for Developers" artifacts from badge text.
+    markdown = markdown.replace(/\bfor Developers\b/gi, '')
+    // Heuristic paragraph splitting for very long paragraphs: break on sentence boundaries.
+    markdown = markdown
+      .split('\n\n')
+      .map(block => {
+        const trimmed = block.trim()
+        if (trimmed.length < 500) return trimmed
+        return trimmed.replace(/([.!?]) (\p{Lu})/gu, '$1\n\n$2')
+      })
+      .join('\n\n')
     markdown = markdown.replace(/\n{3,}/g, '\n\n').trim()
       lines.push(markdown)
       lines.push('')
