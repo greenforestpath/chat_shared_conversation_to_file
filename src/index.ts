@@ -4,6 +4,8 @@ import TurndownService, { type Rule } from 'turndown'
 import fs from 'fs'
 import path from 'path'
 import chalk from 'chalk'
+import MarkdownIt from 'markdown-it'
+import hljs from 'highlight.js'
 import pkg from '../package.json' assert { type: 'json' }
 
 type ScrapedMessage = {
@@ -17,12 +19,191 @@ type CliOptions = {
   quiet: boolean
   checkUpdates: boolean
   versionOnly: boolean
+  generateHtml: boolean
 }
 
 type ParsedArgs = CliOptions & { url: string }
 
 const DEFAULT_TIMEOUT_MS = 60_000
 const MAX_SLUG_LEN = 120
+const INLINE_STYLE = `
+:root {
+  color-scheme: light;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0 auto;
+  padding: 32px 20px 48px;
+  max-width: 900px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  line-height: 1.6;
+  color: #0f172a;
+  background: #f8fafc;
+}
+h1, h2, h3, h4, h5, h6 {
+  color: #0f172a;
+  line-height: 1.25;
+  margin: 1.2em 0 0.4em;
+}
+p {
+  margin: 0 0 1em;
+}
+a {
+  color: #2563eb;
+  text-decoration: none;
+}
+a:hover { text-decoration: underline; }
+code, pre {
+  font-family: SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+code {
+  background: #e2e8f0;
+  color: #0f172a;
+  padding: 0.15em 0.35em;
+  border-radius: 6px;
+  font-size: 0.95em;
+}
+pre {
+  background: #0b1221;
+  color: #e2e8f0;
+  padding: 16px;
+  overflow: auto;
+  border-radius: 10px;
+  border: 1px solid #1f2937;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
+}
+pre code {
+  background: none;
+  padding: 0;
+  color: inherit;
+}
+blockquote {
+  margin: 1em 0;
+  padding: 0.6em 1em;
+  border-left: 4px solid #cbd5e1;
+  background: #f1f5f9;
+  color: #0f172a;
+  border-radius: 6px;
+}
+table {
+  border-collapse: collapse;
+  margin: 1em 0;
+  width: 100%;
+}
+th, td {
+  padding: 8px 10px;
+  border: 1px solid #e2e8f0;
+}
+th {
+  background: #f8fafc;
+  text-align: left;
+}
+ul, ol {
+  padding-left: 1.4em;
+}
+hr {
+  border: 0;
+  border-top: 1px solid #e2e8f0;
+  margin: 2em 0;
+}
+.article {
+  background: white;
+  padding: 28px;
+  border-radius: 14px;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.06);
+}
+.meta {
+  color: #475569;
+  font-size: 0.95em;
+  margin-bottom: 1em;
+}
+.hljs {
+  color: #e2e8f0;
+}
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-section,
+.hljs-link {
+  color: #7aa2f7;
+}
+.hljs-function .hljs-title,
+.hljs-title.class_,
+.hljs-title.function_ {
+  color: #9ece6a;
+}
+.hljs-attr,
+.hljs-name,
+.hljs-tag {
+  color: #7dcfff;
+}
+.hljs-string,
+.hljs-meta .hljs-string {
+  color: #e0af68;
+}
+.hljs-number,
+.hljs-regexp,
+.hljs-variable {
+  color: #f7768e;
+}
+.hljs-built_in,
+.hljs-builtin-name {
+  color: #bb9af7;
+}
+.hljs-comment,
+.hljs-quote {
+  color: #94a3b8;
+}
+.hljs-addition {
+  color: #2ec27e;
+}
+.hljs-deletion {
+  color: #ff6b6b;
+}
+`.trim()
+
+const mdRenderer = new MarkdownIt({
+  html: false,
+  linkify: true,
+  highlight(code, lang) {
+    if (lang && hljs.getLanguage(lang)) {
+      const { value } = hljs.highlight(code, { language: lang, ignoreIllegals: true })
+      return `<pre class="code-block"><code class="hljs language-${lang}">${value}</code></pre>`
+    }
+    const escaped = mdRenderer.utils.escapeHtml(code)
+    return `<pre class="code-block"><code class="hljs">${escaped}</code></pre>`
+  }
+})
+
+function escapeHtml(str: string): string {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+}
+
+function renderHtmlDocument(markdown: string, title: string, source: string, retrieved: string): string {
+  const body = mdRenderer.render(markdown)
+  const safeTitle = escapeHtml(title.replace(/^ChatGPT\s*-?\s*/i, ''))
+  const safeSource = escapeHtml(source)
+  const safeRetrieved = escapeHtml(retrieved)
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${safeTitle}</title>
+  <style>${INLINE_STYLE}</style>
+</head>
+<body>
+  <article class="article">
+    <h1>${safeTitle}</h1>
+    <div class="meta">Source: <a href="${safeSource}" rel="noreferrer noopener">${safeSource}</a><br/>Retrieved: ${safeRetrieved}</div>
+    ${body}
+  </article>
+</body>
+</html>`
+}
 const RESERVED_BASENAMES = new Set([
   'con',
   'prn',
@@ -55,6 +236,7 @@ function parseArgs(args: string[]): ParsedArgs {
   let quiet = false
   let checkUpdates = false
   let versionOnly = false
+  let generateHtml = true
 
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i]
@@ -79,6 +261,9 @@ function parseArgs(args: string[]): ParsedArgs {
       case '-v':
         versionOnly = true
         break
+      case '--no-html':
+        generateHtml = false
+        break
       default:
         if (!url && !arg.startsWith('-')) {
           url = arg
@@ -87,7 +272,7 @@ function parseArgs(args: string[]): ParsedArgs {
     }
   }
 
-  return { url, timeoutMs, outfile, quiet, checkUpdates, versionOnly }
+  return { url, timeoutMs, outfile, quiet, checkUpdates, versionOnly, generateHtml }
 }
 
 const noop = () => {}
@@ -108,7 +293,7 @@ const DONE = (quiet: boolean) => (msg: string) => {
 
 function usage(): void {
   console.log(
-    `Usage: csctm <chatgpt-share-url> [--timeout-ms 60000] [--outfile path] [--quiet] [--check-updates] [--version]`
+    `Usage: csctm <chatgpt-share-url> [--timeout-ms 60000] [--outfile path] [--quiet] [--check-updates] [--version] [--no-html]`
   )
   console.log(`Example: csctm https://chatgpt.com/share/69343092-91ac-800b-996c-7552461b9b70 --timeout-ms 90000`)
 }
@@ -215,7 +400,7 @@ function normalizeLineTerminators(markdown: string): string {
   return markdown.replace(/[\u2028\u2029]/g, '\n')
 }
 
-async function scrape(url: string, timeoutMs: number): Promise<{ title: string; markdown: string }> {
+async function scrape(url: string, timeoutMs: number): Promise<{ title: string; markdown: string; retrievedAt: string }> {
   const td = buildTurndown()
   let browser: Browser | null = null
 
@@ -276,7 +461,7 @@ async function scrape(url: string, timeoutMs: number): Promise<{ title: string; 
       lines.push('')
     }
 
-    return { title, markdown: normalizeLineTerminators(lines.join('\n')) }
+    return { title, markdown: normalizeLineTerminators(lines.join('\n')), retrievedAt }
   } finally {
     if (browser) await browser.close()
   }
@@ -284,7 +469,7 @@ async function scrape(url: string, timeoutMs: number): Promise<{ title: string; 
 
 async function main(): Promise<void> {
   const opts = parseArgs(process.argv.slice(2))
-  const { url, timeoutMs, outfile, quiet, checkUpdates, versionOnly } = opts
+  const { url, timeoutMs, outfile, quiet, checkUpdates, versionOnly, generateHtml } = opts
 
   const step = STEP(quiet)
   const fail = FAIL(quiet)
@@ -306,30 +491,41 @@ async function main(): Promise<void> {
   }
 
   try {
-    step(1, 7, chalk.cyan('Launching headless Chromium'))
-    step(2, 7, chalk.cyan('Opening share link'))
-    const { title, markdown } = await scrape(url, timeoutMs)
+    const totalSteps = generateHtml ? 8 : 7
+    let idx = 1
 
-    step(3, 7, chalk.cyan('Converting to Markdown'))
+    step(idx++, totalSteps, chalk.cyan('Launching headless Chromium'))
+    step(idx++, totalSteps, chalk.cyan('Opening share link'))
+    const { title, markdown, retrievedAt } = await scrape(url, timeoutMs)
+
+    step(idx++, totalSteps, chalk.cyan('Converting to Markdown'))
     const name = slugify(title.replace(/^ChatGPT\s*-?\s*/i, ''))
     const defaultOutfile = uniquePath(path.join(process.cwd(), `${name}.md`))
     const targetOutfile = outfile ? path.resolve(outfile) : defaultOutfile
+    const htmlOutfile = path.join(path.dirname(targetOutfile), `${path.parse(targetOutfile).name}.html`)
 
-    step(4, 7, chalk.cyan('Writing file'))
+    step(idx++, totalSteps, chalk.cyan('Writing Markdown'))
     writeAtomic(targetOutfile, markdown)
+
+    if (generateHtml) {
+      step(idx++, totalSteps, chalk.cyan('Rendering HTML'))
+      const html = renderHtmlDocument(markdown, title, url, retrievedAt)
+      const htmlTarget = fs.existsSync(htmlOutfile) ? uniquePath(htmlOutfile) : htmlOutfile
+      writeAtomic(htmlTarget, html)
+    }
 
     done(`Saved ${path.basename(targetOutfile)}`)
     if (!quiet) {
-      step(5, 7, chalk.cyan('Location'))
+      step(idx++, totalSteps, chalk.cyan('Location'))
       console.log(`   ${chalk.green(targetOutfile)}`)
     }
 
     if (checkUpdates) {
-      step(6, 7, chalk.cyan('Checking for updates'))
+      step(idx++, totalSteps, chalk.cyan('Checking for updates'))
       await checkForUpdates()
     }
 
-    step(7, 7, chalk.cyan('All done. Enjoy!'))
+    step(idx++, totalSteps, chalk.cyan('All done. Enjoy!'))
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     fail(message)

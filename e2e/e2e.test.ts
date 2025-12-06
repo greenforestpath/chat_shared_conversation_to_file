@@ -45,9 +45,12 @@ describeFn("csctm end-to-end", () => {
     expect(run.status).toBe(0);
 
     const mdFiles = readdirSync(tmpDir).filter(f => f.endsWith(".md"));
+    const htmlFiles = readdirSync(tmpDir).filter(f => f.endsWith(".html"));
     expect(mdFiles.length).toBeGreaterThan(0);
+    expect(htmlFiles.length).toBeGreaterThan(0);
 
     const outfile = path.join(tmpDir, mdFiles[0]);
+    const htmlOutfile = path.join(tmpDir, htmlFiles[0]);
     const content = readFileSync(outfile, "utf8");
     const normalized = content.replace(/\r\n/g, "\n");
 
@@ -67,6 +70,13 @@ describeFn("csctm end-to-end", () => {
     // crude markdown fence balance check
     const fenceCount = (normalized.match(/```/g) || []).length;
     expect(fenceCount % 2).toBe(0);
+
+    const html = readFileSync(htmlOutfile, "utf8");
+    expect(html.startsWith("<!doctype html>")).toBe(true);
+    expect(html).toContain("<article class=\"article\">");
+    expect(html).toContain("Source:");
+    expect(html).not.toMatch(/<script/i); // ensure no JS in output
+    expect(html).toContain("<style>");
   });
 });
 
