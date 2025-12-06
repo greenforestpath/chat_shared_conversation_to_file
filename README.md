@@ -26,13 +26,20 @@ curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/chatgpt_shared_co
 
 ## 🧭 Usage
 ```bash
-csctm <chatgpt-share-url> [--timeout-ms 60000] [--outfile path] [--quiet] [--check-updates] [--version] [--no-html]
+csctm <chatgpt-share-url> \
+  [--timeout-ms 60000] [--outfile path] [--quiet] [--check-updates] [--version] \
+  [--no-html] [--html-only] [--md-only] \
+  [--gh-pages-repo owner/name] [--gh-pages-branch gh-pages] [--gh-pages-dir csctm] \
+  [--remember] [--forget-gh-pages] [--dry-run] [--yes]
+
 csctm https://chatgpt.com/share/69343092-91ac-800b-996c-7552461b9b70 --timeout-ms 90000
 ```
 
 What you’ll see:
 - Headless Chromium launch (first run downloads the Playwright bundle).
 - `✔ Saved <file>.md` plus the absolute path; an HTML twin (`.html`) is also written by default. Use `--no-html` to skip.
+- (Optional) Publish to GitHub Pages with `--gh-pages-repo <owner/name>` (defaults to remembered repo or `my_shared_chatgpt_conversations`). Confirm by typing `PROCEED` unless you pass `--yes`. Use `--remember` to persist repo/branch/dir; `--forget-gh-pages` to clear; `--dry-run` to simulate.
+- (Optional) Publish HTML/MD to GitHub Pages via `--gh-pages-repo <repo> [--gh-pages-branch gh-pages] [--gh-pages-dir csctm]` with `GITHUB_TOKEN` set.
 
 ## 🚀 Install (curl | bash)
 - Default install to `~/.local/bin`; `DEST=/custom/path` or `--system` for `/usr/local/bin`.
@@ -58,6 +65,7 @@ curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/chatgpt_shared_co
 - Code fences: language preserved when present (```` ```python ... ``` ````)
 - Newlines: normalized to `\n`; Unicode LS/PS removed.
 - HTML twin: standalone, zero-JS HTML with inline CSS and syntax highlighting (highlight.js theme), same base filename as the Markdown.
+  - Light/dark (prefers-color-scheme) theming, language badges on code blocks, softened card layout, TOC, metadata pills, print-friendly tweaks.
 
 ## 🔍 How it works (pipeline)
 1. Validate URL and print usage on `-h/--help`.
@@ -101,6 +109,20 @@ Checks performed:
 - No stray CR-only line endings or disallowed Unicode separators
 - HTML is static (no `<script>` tags) and contains inline styles.
 
+## 🌐 GitHub Pages publishing (optional)
+- Publish both `.md` and `.html` to a GitHub Pages branch:
+  ```bash
+  GITHUB_TOKEN=... csctm <share-url> \
+    --gh-pages-repo youruser/my_shared_chatgpt_conversations \
+    --gh-pages-branch gh-pages \
+    --gh-pages-dir csctm
+  ```
+- You’ll see a summary and must type `PROCEED` to publish (or pass `--yes`).
+- Use `--remember` to persist repo/branch/dir for next runs; `--forget-gh-pages` to clear.
+- `--dry-run` clones/builds the index but skips commit/push.
+- Index page is auto-regenerated with cards linking to HTML/MD plus added-at timestamps.
+- If you don’t specify a repo, it defaults to `my_shared_chatgpt_conversations` and will infer your GitHub user via `gh`; you can override anytime with `--gh-pages-repo`.
+
 ## ⚙️ CI & releases
 - Workflow: lint → typecheck → unit tests → e2e scrape (Ubuntu) → matrix builds (macOS/Linux/Windows) → upload artifacts.
 - Tagged pushes (`v*`) create a GitHub release via `gh release create` and attach built binaries.
@@ -131,6 +153,8 @@ Checks performed:
 - **Filename conflicts/invalid names:** Filenames are slugified, truncated to 120 chars, avoid Windows reserved names, and auto-suffix `_2`, `_3`, etc.
 - **Partial writes:** Files are written atomically via temp+rename in the target directory.
 - **Skip HTML twin:** Pass `--no-html` if you only need Markdown.
+- **GitHub Pages publish fails:** Ensure `GITHUB_TOKEN` is set with repo write access; use `--gh-pages-branch` if the branch doesn’t exist yet (it will be created), and `--gh-pages-dir` to isolate exports.
+ - **Repo not found:** Provide `--gh-pages-repo owner/name`. If using the default name, ensure `gh` is logged in so we can infer your username or create the repo.
 
 ## ❓ FAQ
 - **Where do the binaries come from?** CI builds macOS/Linux/Windows artifacts on tagged releases; the installer fetches from the latest tag (`releases/latest`) unless you pin `VERSION=vX.Y.Z`.

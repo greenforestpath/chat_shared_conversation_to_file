@@ -5,7 +5,11 @@ import fs from 'fs'
 import path from 'path'
 import chalk from 'chalk'
 import MarkdownIt from 'markdown-it'
+import type { Options as MdOptions } from 'markdown-it'
 import hljs from 'highlight.js'
+import { spawnSync } from 'child_process'
+import os from 'os'
+import readline from 'readline'
 import pkg from '../package.json' assert { type: 'json' }
 
 type ScrapedMessage = {
@@ -20,43 +24,100 @@ type CliOptions = {
   checkUpdates: boolean
   versionOnly: boolean
   generateHtml: boolean
+  htmlOnly: boolean
+  mdOnly: boolean
+  rememberGh: boolean
+  forgetGh: boolean
+  dryRun: boolean
+  yes: boolean
+  ghPagesRepo?: string
+  ghPagesBranch: string
+  ghPagesDir: string
+  autoInstallGh: boolean
 }
 
 type ParsedArgs = CliOptions & { url: string }
 
 const DEFAULT_TIMEOUT_MS = 60_000
 const MAX_SLUG_LEN = 120
+const DEFAULT_GH_REPO = 'my_shared_chatgpt_conversations'
+const CONFIG_DIR = path.join(os.homedir(), '.config', 'csctm')
+const CONFIG_PATH = path.join(CONFIG_DIR, 'config.json')
+
+type GhConfig = {
+  repo: string
+  branch: string
+  dir: string
+}
+
+type PublishHistoryItem = {
+  title: string
+  md?: string
+  html?: string
+  addedAt: string
+}
+
+type AppConfig = {
+  gh?: GhConfig
+  history?: PublishHistoryItem[]
+}
+
+function loadConfig(): AppConfig {
+  try {
+    if (!fs.existsSync(CONFIG_PATH)) return {}
+    const raw = fs.readFileSync(CONFIG_PATH, 'utf8')
+    return JSON.parse(raw) as AppConfig
+  } catch {
+    return {}
+  }
+}
+
+function saveConfig(cfg: AppConfig): void {
+  fs.mkdirSync(CONFIG_DIR, { recursive: true })
+  fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2), 'utf8')
+}
+
+function forgetGhConfig(): void {
+  const cfg = loadConfig()
+  delete cfg.gh
+  saveConfig(cfg)
+}
 const INLINE_STYLE = `
 :root {
   color-scheme: light;
 }
-* {
-  box-sizing: border-box;
-}
+* { box-sizing: border-box; }
 body {
   margin: 0 auto;
-  padding: 32px 20px 48px;
-  max-width: 900px;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  line-height: 1.6;
+  padding: clamp(24px, 4vw, 40px) clamp(16px, 4vw, 32px) clamp(32px, 6vw, 56px);
+  max-width: 980px;
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  line-height: 1.65;
   color: #0f172a;
-  background: #f8fafc;
+  background: radial-gradient(circle at 20% 20%, #f8fafc 0, #f1f5f9 25%, #e2e8f0 60%, #f8fafc 100%);
 }
 h1, h2, h3, h4, h5, h6 {
   color: #0f172a;
   line-height: 1.25;
-  margin: 1.2em 0 0.4em;
+  margin: 1.4em 0 0.5em;
+  letter-spacing: -0.02em;
 }
-p {
-  margin: 0 0 1em;
+h1 {
+  font-size: clamp(2rem, 2.5vw, 2.6rem);
+  border-left: 5px solid #6366f1;
+  padding-left: 12px;
 }
-a {
-  color: #2563eb;
-  text-decoration: none;
+h2 {
+  font-size: clamp(1.35rem, 1.8vw, 1.75rem);
+  border-left: 4px solid #8b5cf6;
+  padding-left: 10px;
 }
+p { margin: 0 0 1.1em; }
+a { color: #2563eb; text-decoration: none; }
 a:hover { text-decoration: underline; }
 code, pre {
-  font-family: SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-family: "JetBrains Mono", "Fira Code", "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-feature-settings: "calt" 1, "liga" 1;
 }
 code {
   background: #e2e8f0;
@@ -65,128 +126,209 @@ code {
   border-radius: 6px;
   font-size: 0.95em;
 }
+.code-block {
+  position: relative;
+  margin: 1.25em 0;
+}
+.code-lang {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  padding: 4px 10px;
+  font-size: 0.75rem;
+  color: #cbd5e1;
+  background: rgba(15, 23, 42, 0.7);
+  border: 1px solid #1f2937;
+  border-radius: 999px;
+}
 pre {
   background: #0b1221;
   color: #e2e8f0;
-  padding: 16px;
+  padding: 18px 16px;
   overflow: auto;
-  border-radius: 10px;
+  border-radius: 12px;
   border: 1px solid #1f2937;
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.03), 0 10px 30px rgba(15, 23, 42, 0.25);
 }
-pre code {
-  background: none;
-  padding: 0;
-  color: inherit;
-}
+pre code { background: none; padding: 0; color: inherit; }
 blockquote {
-  margin: 1em 0;
-  padding: 0.6em 1em;
-  border-left: 4px solid #cbd5e1;
-  background: #f1f5f9;
+  margin: 1.2em 0;
+  padding: 0.75em 1.1em;
+  border-left: 5px solid #cbd5e1;
+  background: linear-gradient(135deg, #f8fafc 0%, #eef2ff 100%);
   color: #0f172a;
-  border-radius: 6px;
+  border-radius: 8px;
 }
-table {
-  border-collapse: collapse;
-  margin: 1em 0;
-  width: 100%;
-}
-th, td {
-  padding: 8px 10px;
-  border: 1px solid #e2e8f0;
-}
-th {
-  background: #f8fafc;
-  text-align: left;
-}
-ul, ol {
-  padding-left: 1.4em;
-}
-hr {
-  border: 0;
-  border-top: 1px solid #e2e8f0;
-  margin: 2em 0;
-}
+table { border-collapse: collapse; margin: 1.2em 0; width: 100%; }
+th, td { padding: 10px 12px; border: 1px solid #e2e8f0; }
+th { background: #f8fafc; text-align: left; }
+ul, ol { padding-left: 1.4em; }
+hr { border: 0; border-top: 1px solid #e2e8f0; margin: 2em 0; }
 .article {
-  background: white;
-  padding: 28px;
-  border-radius: 14px;
-  border: 1px solid #e2e8f0;
-  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.06);
+  background: rgba(255,255,255,0.9);
+  backdrop-filter: blur(6px);
+  padding: clamp(22px, 3vw, 32px);
+  border-radius: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.12);
 }
 .meta {
+  display: inline-flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
   color: #475569;
   font-size: 0.95em;
-  margin-bottom: 1em;
+  margin: 0.5em 0 1.4em;
 }
-.hljs {
-  color: #e2e8f0;
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  color: #0f172a;
+  border: 1px solid #cbd5e1;
 }
+.toc {
+  margin: 1.5em 0 2em;
+  padding: 14px 16px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+}
+.toc h3 {
+  margin: 0 0 0.5em;
+  font-size: 1rem;
+  color: #0f172a;
+}
+.toc ul {
+  margin: 0;
+  padding-left: 1.2em;
+}
+.hljs { color: #e2e8f0; }
 .hljs-keyword,
 .hljs-selector-tag,
 .hljs-literal,
 .hljs-section,
-.hljs-link {
-  color: #7aa2f7;
-}
+.hljs-link { color: #7aa2f7; }
 .hljs-function .hljs-title,
 .hljs-title.class_,
-.hljs-title.function_ {
-  color: #9ece6a;
-}
+.hljs-title.function_ { color: #9ece6a; }
 .hljs-attr,
 .hljs-name,
-.hljs-tag {
-  color: #7dcfff;
-}
+.hljs-tag { color: #7dcfff; }
 .hljs-string,
-.hljs-meta .hljs-string {
-  color: #e0af68;
-}
+.hljs-meta .hljs-string { color: #e0af68; }
 .hljs-number,
 .hljs-regexp,
-.hljs-variable {
-  color: #f7768e;
-}
+.hljs-variable { color: #f7768e; }
 .hljs-built_in,
-.hljs-builtin-name {
-  color: #bb9af7;
-}
+.hljs-builtin-name { color: #bb9af7; }
 .hljs-comment,
-.hljs-quote {
-  color: #94a3b8;
+.hljs-quote { color: #94a3b8; }
+.hljs-addition { color: #2ec27e; }
+.hljs-deletion { color: #ff6b6b; }
+@media (prefers-color-scheme: dark) {
+  body {
+    color: #e2e8f0;
+    background: radial-gradient(circle at 20% 20%, #0f172a 0, #0b1221 45%, #0f172a 100%);
+  }
+  .article {
+    background: rgba(15, 23, 42, 0.85);
+    border: 1px solid rgba(148, 163, 184, 0.28);
+  }
+  h1, h2, h3, h4, h5, h6 { color: #e2e8f0; }
+  a { color: #93c5fd; }
+  code { background: #1f2937; color: #e2e8f0; }
+  blockquote {
+    border-left-color: #475569;
+    background: linear-gradient(135deg, rgba(30, 41, 59, 0.7), rgba(51, 65, 85, 0.8));
+    color: #e2e8f0;
+  }
+  th { background: #111827; border-color: #1f2937; }
+  td { border-color: #1f2937; }
+  hr { border-top-color: #1f2937; }
+  .pill {
+    background: #1f2937;
+    color: #e2e8f0;
+    border-color: #334155;
+  }
+  .toc {
+    background: #111827;
+    border-color: #1f2937;
+  }
 }
-.hljs-addition {
-  color: #2ec27e;
-}
-.hljs-deletion {
-  color: #ff6b6b;
+@media print {
+  body { background: white; color: black; box-shadow: none; }
+  .article { box-shadow: none; border: 1px solid #e5e7eb; }
+  pre { page-break-inside: avoid; }
+  h2, h3 { page-break-after: avoid; }
 }
 `.trim()
 
-const mdRenderer = new MarkdownIt({
-  html: false,
-  linkify: true,
-  highlight(code, lang) {
-    if (lang && hljs.getLanguage(lang)) {
-      const { value } = hljs.highlight(code, { language: lang, ignoreIllegals: true })
-      return `<pre class="code-block"><code class="hljs language-${lang}">${value}</code></pre>`
-    }
-    const escaped = mdRenderer.utils.escapeHtml(code)
-    return `<pre class="code-block"><code class="hljs">${escaped}</code></pre>`
-  }
-})
-
-function escapeHtml(str: string): string {
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+const headingSlug = (text: string, counts: Map<string, number>): string => {
+  const base = text
+    .toLowerCase()
+    .replace(/[^\w\s-]/g, '')
+    .trim()
+    .replace(/\s+/g, '-')
+  const existing = counts.get(base) ?? 0
+  counts.set(base, existing + 1)
+  return existing === 0 ? base : `${base}-${existing}`
 }
 
 function renderHtmlDocument(markdown: string, title: string, source: string, retrieved: string): string {
-  const body = mdRenderer.render(markdown)
-  const safeTitle = escapeHtml(title.replace(/^ChatGPT\s*-?\s*/i, ''))
-  const safeSource = escapeHtml(source)
-  const safeRetrieved = escapeHtml(retrieved)
+  const counts = new Map<string, number>()
+  const headings: { level: number; text: string; id: string }[] = []
+
+  const md = new MarkdownIt({ html: false, linkify: true })
+  md.set({
+    highlight(code: string, lang: string): string {
+      if (lang && hljs.getLanguage(lang)) {
+        const { value } = hljs.highlight(code, { language: lang, ignoreIllegals: true })
+        return `<div class="code-block"><div class="code-lang">${lang}</div><pre><code class="hljs language-${lang}">${value}</code></pre></div>`
+      }
+      const escaped = md.utils.escapeHtml(code)
+      return `<div class="code-block"><pre><code class="hljs">${escaped}</code></pre></div>`
+    }
+  })
+
+  md.renderer.rules.heading_open = (
+    tokens: any[],
+    idx: number,
+    opts: MdOptions,
+    _env: unknown,
+    self: any
+  ) => {
+    const titleToken = tokens[idx + 1]
+    const text = titleToken?.content ?? ''
+    const id = headingSlug(text, counts)
+    tokens[idx].attrSet('id', id)
+    const level = Number.parseInt(tokens[idx].tag.replace('h', ''), 10)
+    headings.push({ level, text, id })
+    return self.renderToken(tokens, idx, opts)
+  }
+
+  const body = md.render(markdown)
+  const safeTitle = md.utils.escapeHtml(title.replace(/^ChatGPT\s*-?\s*/i, ''))
+  const safeSource = md.utils.escapeHtml(source)
+  const safeRetrieved = md.utils.escapeHtml(retrieved)
+
+  const toc =
+    headings.length > 0
+      ? `<div class="toc">
+    <h3>Contents</h3>
+    <ul>
+      ${headings
+        .filter(h => h.level <= 3)
+        .map(h => `<li style="margin-left:${(h.level - 2) * 12}px"><a href="#${h.id}">${md.utils.escapeHtml(h.text)}</a></li>`)
+        .join('\n')}
+    </ul>
+  </div>`
+      : ''
+
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -197,8 +339,13 @@ function renderHtmlDocument(markdown: string, title: string, source: string, ret
 </head>
 <body>
   <article class="article">
+    <div class="meta">
+      <span class="pill">📄 ${safeTitle}</span>
+      <span class="pill">🔗 <a href="${safeSource}" rel="noreferrer noopener">${safeSource}</a></span>
+      <span class="pill">⏰ ${safeRetrieved}</span>
+    </div>
     <h1>${safeTitle}</h1>
-    <div class="meta">Source: <a href="${safeSource}" rel="noreferrer noopener">${safeSource}</a><br/>Retrieved: ${safeRetrieved}</div>
+    ${toc}
     ${body}
   </article>
 </body>
@@ -237,6 +384,16 @@ function parseArgs(args: string[]): ParsedArgs {
   let checkUpdates = false
   let versionOnly = false
   let generateHtml = true
+  let htmlOnly = false
+  let mdOnly = false
+  let rememberGh = false
+  let forgetGh = false
+  let dryRun = false
+  let yes = false
+  let ghPagesRepo: string | undefined
+  let ghPagesBranch = 'gh-pages'
+  let ghPagesDir = 'csctm'
+  let autoInstallGh = false
 
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i]
@@ -264,6 +421,43 @@ function parseArgs(args: string[]): ParsedArgs {
       case '--no-html':
         generateHtml = false
         break
+      case '--html-only':
+        htmlOnly = true
+        generateHtml = true
+        mdOnly = false
+        break
+      case '--md-only':
+        mdOnly = true
+        generateHtml = false
+        break
+      case '--remember':
+        rememberGh = true
+        break
+      case '--forget-gh-pages':
+        forgetGh = true
+        break
+      case '--dry-run':
+        dryRun = true
+        break
+      case '--yes':
+      case '--no-confirm':
+        yes = true
+        break
+      case '--gh-pages-repo':
+        ghPagesRepo = args[i + 1]
+        i += 1
+        break
+      case '--gh-pages-branch':
+        ghPagesBranch = args[i + 1] ?? ghPagesBranch
+        i += 1
+        break
+      case '--gh-pages-dir':
+        ghPagesDir = args[i + 1] ?? ghPagesDir
+        i += 1
+        break
+      case '--gh-install':
+        autoInstallGh = true
+        break
       default:
         if (!url && !arg.startsWith('-')) {
           url = arg
@@ -272,10 +466,31 @@ function parseArgs(args: string[]): ParsedArgs {
     }
   }
 
-  return { url, timeoutMs, outfile, quiet, checkUpdates, versionOnly, generateHtml }
+  if (htmlOnly && mdOnly) {
+    throw new Error('Cannot combine --html-only and --md-only')
+  }
+
+  return {
+    url,
+    timeoutMs,
+    outfile,
+    quiet,
+    checkUpdates,
+    versionOnly,
+    generateHtml,
+    htmlOnly,
+    mdOnly,
+    rememberGh,
+    forgetGh,
+    dryRun,
+    yes,
+    ghPagesRepo,
+    ghPagesBranch,
+    ghPagesDir,
+    autoInstallGh
+  }
 }
 
-const noop = () => {}
 const STEP = (quiet: boolean) => (n: number, total: number, msg: string) => {
   if (quiet) return
   console.log(`${chalk.gray(`[${n}/${total}]`)} ${msg}`)
@@ -293,7 +508,7 @@ const DONE = (quiet: boolean) => (msg: string) => {
 
 function usage(): void {
   console.log(
-    `Usage: csctm <chatgpt-share-url> [--timeout-ms 60000] [--outfile path] [--quiet] [--check-updates] [--version] [--no-html]`
+    `Usage: csctm <chatgpt-share-url> [--timeout-ms 60000] [--outfile path] [--quiet] [--check-updates] [--version] [--no-html] [--html-only] [--md-only] [--gh-pages-repo owner/name] [--gh-pages-branch gh-pages] [--gh-pages-dir dir] [--remember] [--forget-gh-pages] [--dry-run] [--yes]`
   )
   console.log(`Example: csctm https://chatgpt.com/share/69343092-91ac-800b-996c-7552461b9b70 --timeout-ms 90000`)
 }
@@ -387,6 +602,215 @@ function writeAtomic(target: string, content: string): void {
   fs.renameSync(tmp, target)
 }
 
+function isGhCliAvailable(): boolean {
+  const res = spawnSync('gh', ['--version'], { stdio: 'ignore' })
+  return res.status === 0
+}
+
+function currentGhLogin(): string | null {
+  const res = spawnSync('gh', ['api', 'user', '--jq', '.login'], { encoding: 'utf8' })
+  if (res.status !== 0) return null
+  return (res.stdout || '').trim() || null
+}
+
+async function confirmPublish(summary: string, yes: boolean): Promise<void> {
+  if (yes) return
+  if (!process.stdin.isTTY) {
+    throw new Error('Publishing requires confirmation (type PROCEED) or use --yes in non-interactive environments.')
+  }
+  console.log(chalk.yellow(summary))
+  console.log(chalk.yellow('Type PROCEED to publish to GitHub Pages (public): '))
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+  const answer: string = await new Promise(resolve => rl.question('> ', resolve))
+  rl.close()
+  if (answer.trim() !== 'PROCEED') {
+    throw new Error('Publish cancelled (confirmation not received).')
+  }
+}
+
+type PublishOpts = {
+  files: { path: string; kind: 'md' | 'html' }[]
+  repo: string
+  branch: string
+  dir: string
+  quiet: boolean
+  dryRun: boolean
+  remember: boolean
+  config: AppConfig
+  entry: PublishHistoryItem
+}
+
+function resolveRepoUrl(repo: string): { repo: string; url: string } {
+  if (repo.startsWith('http')) return { repo, url: repo }
+  if (!repo.includes('/')) {
+    const login = currentGhLogin()
+    if (!login) throw new Error('Specify --gh-pages-repo as owner/name or ensure gh is logged in.')
+    const full = `${login}/${repo}`
+    return { repo: full, url: `https://github.com/${full}.git` }
+  }
+  return { repo, url: `https://github.com/${repo}.git` }
+}
+
+function renderIndex(manifest: PublishHistoryItem[], title = 'csctm exports'): string {
+  const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  const cards = manifest
+    .map(item => {
+      const mdLink = item.md ? `<a href="./${encodeURIComponent(item.md)}">Markdown</a>` : ''
+      const htmlLink = item.html ? `<a href="./${encodeURIComponent(item.html)}">HTML</a>` : ''
+      const links = [htmlLink, mdLink].filter(Boolean).join(' • ')
+      return `<div class="card">
+  <div class="card-title">${esc(item.title)}</div>
+  <div class="card-meta">Added: ${esc(item.addedAt)}</div>
+  <div class="card-links">${links}</div>
+</div>`
+    })
+    .join('\n')
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>${title}</title>
+  <style>
+    body { font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background: #0f172a; margin: 0; padding: 32px; color: #e2e8f0; }
+    h1 { margin: 0 0 18px; font-size: 1.8rem; }
+    .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+    .card { background: rgba(15,23,42,0.75); border: 1px solid #1f2937; border-radius: 12px; padding: 16px; box-shadow: 0 10px 30px rgba(0,0,0,0.25); }
+    .card-title { font-weight: 600; margin-bottom: 6px; }
+    .card-meta { font-size: 0.9rem; color: #cbd5e1; margin-bottom: 8px; }
+    .card-links a { color: #93c5fd; text-decoration: none; font-weight: 600; }
+    .card-links a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <h1>${title}</h1>
+  <div class="grid">
+    ${cards}
+  </div>
+</body>
+</html>`
+}
+
+async function publishToGhPages(opts: PublishOpts): Promise<AppConfig> {
+  const { files, repo, branch, dir, quiet, dryRun, remember, config, entry } = opts
+  const token = process.env.GITHUB_TOKEN
+  if (!token) throw new Error('GITHUB_TOKEN is required for gh-pages publishing.')
+
+  const { repo: repoName, url } = resolveRepoUrl(repo)
+  const urlWithToken = url.replace('https://', `https://${token}@`)
+  const tmp = fs.mkdtempSync(path.join(fs.realpathSync(osTmpDir()), 'csctm-ghp-'))
+
+  const run = (args: string[]) => {
+    const res = spawnSync('git', args, {
+      cwd: tmp,
+      stdio: quiet ? 'ignore' : 'inherit',
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+    })
+    if (res.status !== 0) {
+      throw new Error(`git ${args.join(' ')} failed with code ${res.status ?? 'unknown'}`)
+    }
+  }
+
+  const attemptClone = (branchName: string): number =>
+    spawnSync('git', ['clone', '--depth', '1', '--branch', branchName, urlWithToken, tmp], {
+      stdio: quiet ? 'ignore' : 'inherit',
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+    }).status ?? 1
+
+  let cloned = attemptClone(branch)
+  if (cloned !== 0) {
+    const defaultClone = spawnSync('git', ['clone', '--depth', '1', urlWithToken, tmp], {
+      stdio: quiet ? 'ignore' : 'inherit',
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+    })
+    if (defaultClone.status !== 0) {
+      if (isGhCliAvailable()) {
+        const create = spawnSync('gh', ['repo', 'create', repoName, '--public', '--confirm'], {
+          stdio: quiet ? 'ignore' : 'inherit'
+        })
+        if (create.status !== 0) {
+          throw new Error('Failed to create repository via gh. Provide an existing repo with --gh-pages-repo owner/name.')
+        }
+        cloned = attemptClone(branch)
+      } else {
+        throw new Error('Failed to clone repository. Ensure repo exists or install gh and set --gh-pages-repo owner/name.')
+      }
+    }
+  }
+
+  if (cloned !== 0) {
+    run(['checkout', '-b', branch])
+  }
+
+  const targetDir = path.join(tmp, dir)
+  fs.mkdirSync(targetDir, { recursive: true })
+
+  const manifestPath = path.join(targetDir, 'manifest.json')
+  let manifest: PublishHistoryItem[] = []
+  try {
+    if (fs.existsSync(manifestPath)) {
+      manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as PublishHistoryItem[]
+    }
+  } catch {
+    manifest = []
+  }
+
+  let mdName: string | undefined
+  let htmlName: string | undefined
+
+  for (const file of files) {
+    const base = path.basename(file.path)
+    const dest = path.join(targetDir, base)
+    fs.copyFileSync(file.path, dest)
+    if (file.kind === 'md') mdName = base
+    if (file.kind === 'html') htmlName = base
+  }
+
+  const newEntry: PublishHistoryItem = {
+    title: entry.title,
+    md: mdName,
+    html: htmlName,
+    addedAt: entry.addedAt
+  }
+
+  manifest = manifest.filter(
+    item => !(item.md && item.md === mdName) && !(item.html && htmlName && item.html === htmlName)
+  )
+  manifest.push(newEntry)
+  manifest.sort((a, b) => b.addedAt.localeCompare(a.addedAt))
+
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf8')
+  const indexHtml = renderIndex(manifest)
+  fs.writeFileSync(path.join(targetDir, 'index.html'), indexHtml, 'utf8')
+
+  if (dryRun) {
+    if (!quiet) console.log(chalk.gray('Dry run: skipping git commit/push'))
+    return config
+  }
+
+  run(['add', '.'])
+  const status = spawnSync('git', ['status', '--porcelain'], { cwd: tmp, encoding: 'utf8' })
+  if (status.stdout.trim().length === 0) return config
+  run(['commit', '-m', `Add csctm export: ${entry.title.slice(0, 60)}`])
+  run(['push', 'origin', branch])
+
+  if (remember) {
+    const nextCfg: AppConfig = {
+      ...config,
+      gh: { repo: repoName, branch, dir }
+    }
+    saveConfig(nextCfg)
+    return nextCfg
+  }
+
+  return config
+}
+
+function osTmpDir(): string {
+  return os.tmpdir()
+}
+
 function cleanHtml(html: string): string {
   return html
     .replace(/<span[^>]*data-testid="webpage-citation-pill"[^>]*>[\s\S]*?<\/span>/gi, '')
@@ -469,7 +893,24 @@ async function scrape(url: string, timeoutMs: number): Promise<{ title: string; 
 
 async function main(): Promise<void> {
   const opts = parseArgs(process.argv.slice(2))
-  const { url, timeoutMs, outfile, quiet, checkUpdates, versionOnly, generateHtml } = opts
+  const {
+    url,
+    timeoutMs,
+    outfile,
+    quiet,
+    checkUpdates,
+    versionOnly,
+    generateHtml,
+    htmlOnly,
+    mdOnly,
+    rememberGh,
+    forgetGh,
+    dryRun,
+    yes,
+    ghPagesRepo,
+    ghPagesBranch,
+    ghPagesDir
+  } = opts
 
   const step = STEP(quiet)
   const fail = FAIL(quiet)
@@ -490,8 +931,30 @@ async function main(): Promise<void> {
     process.exit(1)
   }
 
+  if (forgetGh) {
+    forgetGhConfig()
+  }
+  const config = forgetGh ? {} : loadConfig()
+  const produceMd = !htmlOnly
+  const produceHtml = !mdOnly && generateHtml
+  if (!produceMd && !produceHtml) {
+    fail('At least one output format is required (Markdown and/or HTML).')
+    process.exit(1)
+  }
+
+  const ghRepoResolved = ghPagesRepo ?? config.gh?.repo ?? DEFAULT_GH_REPO
+  const ghBranchResolved = ghPagesBranch || config.gh?.branch || 'gh-pages'
+  const ghDirResolved = ghPagesDir || config.gh?.dir || 'csctm'
+  const shouldPublish = Boolean(ghPagesRepo || config.gh || process.env.GITHUB_TOKEN)
+  const shouldRemember = rememberGh || (!config.gh && shouldPublish)
+
   try {
-    const totalSteps = generateHtml ? 8 : 7
+    const totalSteps =
+      5 +
+      (produceMd ? 1 : 0) +
+      (produceHtml ? 1 : 0) +
+      (shouldPublish ? 1 : 0) +
+      (checkUpdates ? 1 : 0)
     let idx = 1
 
     step(idx++, totalSteps, chalk.cyan('Launching headless Chromium'))
@@ -501,23 +964,55 @@ async function main(): Promise<void> {
     step(idx++, totalSteps, chalk.cyan('Converting to Markdown'))
     const name = slugify(title.replace(/^ChatGPT\s*-?\s*/i, ''))
     const defaultOutfile = uniquePath(path.join(process.cwd(), `${name}.md`))
-    const targetOutfile = outfile ? path.resolve(outfile) : defaultOutfile
-    const htmlOutfile = path.join(path.dirname(targetOutfile), `${path.parse(targetOutfile).name}.html`)
+    const baseOutfile = outfile ? path.resolve(outfile) : defaultOutfile
+    const targetOutfile = produceMd ? baseOutfile : baseOutfile
+    const htmlOutfile = path.join(path.dirname(baseOutfile), `${path.parse(baseOutfile).name}.html`)
 
-    step(idx++, totalSteps, chalk.cyan('Writing Markdown'))
-    writeAtomic(targetOutfile, markdown)
+    const writtenFiles: { path: string; kind: 'md' | 'html' }[] = []
+    if (produceMd) {
+      step(idx++, totalSteps, chalk.cyan('Writing Markdown'))
+      writeAtomic(targetOutfile, markdown)
+      writtenFiles.push({ path: targetOutfile, kind: 'md' })
+    }
 
-    if (generateHtml) {
+    if (produceHtml) {
       step(idx++, totalSteps, chalk.cyan('Rendering HTML'))
       const html = renderHtmlDocument(markdown, title, url, retrievedAt)
       const htmlTarget = fs.existsSync(htmlOutfile) ? uniquePath(htmlOutfile) : htmlOutfile
       writeAtomic(htmlTarget, html)
+      writtenFiles.push({ path: htmlTarget, kind: 'html' })
     }
 
     done(`Saved ${path.basename(targetOutfile)}`)
     if (!quiet) {
       step(idx++, totalSteps, chalk.cyan('Location'))
-      console.log(`   ${chalk.green(targetOutfile)}`)
+      if (produceMd) console.log(`   ${chalk.green(targetOutfile)}`)
+      const htmlPath = writtenFiles.find(f => f.kind === 'html')?.path
+      if (produceHtml && htmlPath) console.log(`   ${chalk.green(htmlPath)}`)
+    }
+
+    if (shouldPublish) {
+      const publishSummary = [
+        'You are about to publish the following files to GitHub Pages (public):',
+        ...writtenFiles.map(f => ` - ${f.path}`),
+        `Repo: ${ghRepoResolved}  Branch: ${ghBranchResolved}  Dir: ${ghDirResolved}`
+      ].join('\n')
+      await confirmPublish(publishSummary, yes)
+      step(idx++, totalSteps, chalk.cyan('Publishing to GitHub Pages'))
+      const updatedConfig = await publishToGhPages({
+        files: writtenFiles,
+        repo: ghRepoResolved,
+        branch: ghBranchResolved,
+        dir: ghDirResolved,
+        quiet,
+        dryRun,
+        remember: shouldRemember,
+        config,
+        entry: { title: title.replace(/^ChatGPT\s*-?\s*/i, ''), addedAt: retrievedAt }
+      })
+      if (shouldRemember && !dryRun) {
+        saveConfig(updatedConfig)
+      }
     }
 
     if (checkUpdates) {
