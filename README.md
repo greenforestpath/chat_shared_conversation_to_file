@@ -101,6 +101,19 @@ curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/chat_shared_conve
 - Windows: run the installer via Git Bash or WSL (native Windows binary also produced in `dist/`).
 - First run downloads Playwright Chromium; cache is typically `~/.cache/ms-playwright` (Linux/macOS) or `%USERPROFILE%\AppData\Local\ms-playwright` (Windows).
 
+## 🚀 Using it (one-liners)
+After install, just pass a share URL:
+
+```bash
+csctf https://chatgpt.com/share/69343092-91ac-800b-996c-7552461b9b70
+csctf https://grok.com/share/bGVnYWN5_d5329c61-f497-40b7-9472-c555fa71af9c
+csctf https://gemini.google.com/share/66d944b0e6b9
+```
+
+You’ll get two files in your current directory with a clean, collision-proof name:
+- `<name>.md` (Markdown)
+- `<name>.html` (static HTML, zero JS)
+
 ## 🧭 Usage
 ```bash
 csctf <share-url> \
@@ -145,7 +158,7 @@ What you’ll see:
 
 ## 🔒 Security & network behavior
 - Network calls: only the share URL, plus optional `--check-updates` and GitHub publish flows.
-- Tokens: only `GITHUB_TOKEN` is read (for publishing). No tokens are stored.
+- Uses the GitHub CLI (`gh`) for publish auth; no tokens are stored.
 - Headless-only for speed/determinism; Chromium downloaded once and cached.
 
 ## 📈 Performance notes
@@ -162,6 +175,11 @@ GITHUB_TOKEN=... csctf <share-url> \
   --gh-pages-dir csctf \
   --yes
 ```
+- Minimal steps:
+  1) Set `GITHUB_TOKEN` (repo write).  
+  2) Run the command above with your repo.  
+  3) Next time, reuse remembered settings with `--remember` (or clear with `--forget-gh-pages`).  
+  4) Use `--yes` to skip the `PROCEED` prompt; add `--dry-run` to see what would publish.
 - Without `--yes`, you must type `PROCEED`. Use `--remember` to persist repo/branch/dir; `--forget-gh-pages` to clear. `--dry-run` clones/builds the index but skips commit/push.
 
 ## 🌱 Environment variables

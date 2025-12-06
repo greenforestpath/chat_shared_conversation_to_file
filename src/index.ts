@@ -1667,6 +1667,9 @@ export async function publishToGhPages(opts: PublishOpts): Promise<AppConfig> {
 
   const targetDir = path.join(tmp, dir)
   fs.mkdirSync(targetDir, { recursive: true })
+  // Ensure GitHub Pages skips Jekyll at the repo root and inside the publish dir
+  fs.writeFileSync(path.join(tmp, '.nojekyll'), '', 'utf8')
+  fs.writeFileSync(path.join(targetDir, '.nojekyll'), '', 'utf8')
 
   const manifestPath = path.join(targetDir, 'manifest.json')
   let manifest: PublishHistoryItem[] = []
