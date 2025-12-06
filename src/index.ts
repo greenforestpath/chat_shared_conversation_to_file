@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { chromium, type Browser, type Page } from 'playwright-chromium'
+import { chromium, type Browser, type BrowserContext, type Page } from 'playwright-chromium'
 import TurndownService, { type Rule } from 'turndown'
 import fs from 'fs'
 import path from 'path'
@@ -90,6 +90,10 @@ type CliOptions = {
   forgetGh: boolean
   dryRun: boolean
   yes: boolean
+  claudeCookieFile?: string
+  claudeCookiePrompt: boolean
+  claudeBrowserAssist: boolean
+  claudeAttachWs?: string
   ghPagesRepo?: string
   ghPagesBranch: string
   ghPagesDir: string
@@ -260,7 +264,7 @@ function loadConfig(): AppConfig {
       if (!validGh) return {}
     }
     return parsed
-  } catch (err) {
+  } catch {
     console.error(chalk.gray('Ignoring malformed config; using defaults.'))
     return {}
   }
@@ -595,7 +599,7 @@ function parseArgs(args: string[]): ParsedArgs {
   let outputDir: string | undefined
   let quiet = false
   let verbose = false
-  let format: 'both' | 'md' | 'html' = 'both'
+  const format: 'both' | 'md' | 'html' = 'both'
   let headless = true
   let openAfter = false
   let copy = false
@@ -613,6 +617,10 @@ function parseArgs(args: string[]): ParsedArgs {
   let forgetGh = false
   let dryRun = false
   let yes = false
+  let claudeCookieFile: string | undefined
+  let claudeCookiePrompt = false
+  let claudeBrowserAssist = false
+  let claudeAttachWs: string | undefined
   let ghPagesRepo: string | undefined
   let ghPagesBranch = 'gh-pages'
   let ghPagesDir = 'csctf'
@@ -667,6 +675,20 @@ function parseArgs(args: string[]): ParsedArgs {
         } else {
           throw new AppError('--title requires a value')
         }
+        break
+      case '--claude-cookie-file':
+        claudeCookieFile = args[i + 1]
+        i += 1
+        break
+      case '--claude-cookie-prompt':
+        claudeCookiePrompt = true
+        break
+      case '--claude-browser-assist':
+        claudeBrowserAssist = true
+        break
+      case '--claude-attach-ws':
+        claudeAttachWs = args[i + 1]
+        i += 1
         break
       case '--wait-for-selector':
         if (i + 1 < args.length && !args[i + 1].startsWith('-')) {
@@ -778,6 +800,10 @@ function parseArgs(args: string[]): ParsedArgs {
     forgetGh,
     dryRun,
     yes,
+    claudeCookieFile,
+    claudeCookiePrompt,
+    claudeBrowserAssist,
+    claudeAttachWs,
     ghPagesRepo,
     ghPagesBranch,
     ghPagesDir,
@@ -838,6 +864,7 @@ function usage(): void {
       `  [--timeout-ms 60000] [--outfile path|--output-dir dir] [--quiet] [--verbose] [--format both|md|html]`,
       `  [--headful|--headless]`,
       `  [--open] [--copy] [--json] [--title "Custom Title"] [--wait-for-selector "<css>"] [--debug]`,
+      `  [--claude-browser-assist] [--claude-attach-ws wsUrl] [--claude-cookie-file path] [--claude-cookie-prompt]`,
       `  [--check-updates|--no-check-updates] [--version] [--no-html] [--html-only] [--md-only]`,
       `  [--gh-pages-repo owner/name] [--gh-pages-branch gh-pages] [--gh-pages-dir dir]`,
       `  [--remember] [--forget-gh-pages] [--dry-run] [--yes] [--help] [--gh-install]`,
@@ -1202,7 +1229,7 @@ function renderIndex(manifest: PublishHistoryItem[], title = 'csctf exports'): s
 }
 
 export async function publishToGhPages(opts: PublishOpts): Promise<AppConfig> {
-  const { files, repo, branch, dir, quiet, verbose, dryRun, remember, config, entry } = opts
+  const { files, repo, branch, dir, quiet, dryRun, remember, config, entry } = opts
   if (!repo || !repo.trim()) {
     throw new Error('GitHub repository is required for publishing (owner/name).')
   }
@@ -1441,12 +1468,45 @@ async function scrape(
   url: string,
   timeoutMs: number,
   provider: Provider,
-  opts: { waitForSelector?: string; debug?: boolean; headless: boolean }
+  opts: {
+    waitForSelector?: string
+    debug?: boolean
+    headless: boolean
+    claudeCookieFile?: string
+    claudeCookiePrompt?: boolean
+    claudeBrowserAssist?: boolean
+    claudeAttachWs?: string
+  }
 ): Promise<{ title: string; markdown: string; retrievedAt: string }> {
   const td = buildTurndown()
   let browser: Browser | null = null
+  let cdpBrowser: Browser | null = null
+  let context: BrowserContext | null = null
   let page!: Page
-  const claudeCookie = process.env.CSCTF_CLAUDE_COOKIE?.trim()
+  const resolveClaudeCookie = async (): Promise<string | undefined> => {
+    const envCookie = process.env.CSCTF_CLAUDE_COOKIE?.trim()
+    if (envCookie) return envCookie
+    if (opts.claudeCookieFile) {
+      try {
+        const fileCookie = fs.readFileSync(opts.claudeCookieFile, 'utf8').trim()
+        if (fileCookie) return fileCookie
+      } catch {
+        /* ignore */
+      }
+    }
+    if (opts.claudeCookiePrompt) {
+      if (!process.stdin.isTTY) return undefined
+      return await new Promise(resolve => {
+        const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+        rl.question('Claude cookie (e.g., cf_clearance=...; __cf_bm=...): ', answer => {
+          rl.close()
+          resolve(answer.trim() || undefined)
+        })
+      })
+    }
+    return undefined
+  }
+  const claudeCookie = provider === 'claude' ? await resolveClaudeCookie() : undefined
 
   const resolveChromiumExecutable = (): string | undefined => {
     const candidates =
@@ -1484,43 +1544,76 @@ async function scrape(
   }
 
   try {
-    browser = await chromium.launch({
-      headless: opts.headless,
-      executablePath: resolveChromiumExecutable(),
-      args: [
-        '--disable-blink-features=AutomationControlled',
-        '--disable-features=IsolateOrigins,site-per-process',
-        '--disable-site-isolation-trials'
-      ]
-    })
-    page = await browser.newPage({
-      userAgent:
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-      viewport: { width: 1366, height: 768 }
-    })
-    const realHeaders: Record<string, string> = {
-      'sec-ch-ua': '"Not.A/Brand";v="24", "Chromium";v="122", "Google Chrome";v="122"',
-      'sec-ch-ua-platform': '"macOS"',
-      'sec-ch-ua-mobile': '?0',
-      'upgrade-insecure-requests': '1',
-      'accept-language': 'en-US,en;q=0.9',
-      accept:
-        'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7'
-    }
-    await page.setExtraHTTPHeaders(realHeaders)
-    if (provider === 'claude' && claudeCookie) {
-      await page.setExtraHTTPHeaders({ ...realHeaders, cookie: claudeCookie })
-    }
-    await page.route('**/*', route => {
-      const headers = {
-        ...route.request().headers(),
-        ...realHeaders
+    const executablePath = resolveChromiumExecutable()
+    if (provider === 'claude' && opts.claudeBrowserAssist) {
+      // Attach to an existing remote-debug Chrome if provided; otherwise launch a temp profile headful Chrome with RD port.
+      const existingWs = opts.claudeAttachWs ?? process.env.CSCTF_CLAUDE_WS_URL
+      if (existingWs) {
+        cdpBrowser = await chromium.connectOverCDP(existingWs)
+        context = cdpBrowser.contexts()[0] ?? (await cdpBrowser.newContext())
+        const pages = context.pages()
+        page = pages[0] ?? (await context.newPage())
+      } else {
+        const executablePath = resolveChromiumExecutable()
+        const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'csctf-chrome-'))
+        context = await chromium.launchPersistentContext(userDataDir, {
+          headless: false,
+          executablePath,
+          viewport: { width: 1366, height: 768 },
+          locale: 'en-US'
+        })
+        page = context.pages()[0] ?? (await context.newPage())
       }
-      if (provider === 'claude' && claudeCookie && /claude\.ai/.test(route.request().url())) {
-        headers.cookie = claudeCookie
+      if (claudeCookie) {
+        await page.setExtraHTTPHeaders({ cookie: claudeCookie })
       }
-      route.continue({ headers })
-    })
+    } else if (provider === 'claude') {
+      // Use a persistent, headful, real Chrome profile to mimic a normal user as closely as possible.
+      const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'csctf-chrome-'))
+      context = await chromium.launchPersistentContext(userDataDir, {
+        headless: false,
+        executablePath,
+        viewport: { width: 1366, height: 768 },
+        locale: 'en-US',
+        userAgent: undefined
+      })
+      page = context.pages()[0] ?? (await context.newPage())
+      if (claudeCookie) {
+        await page.setExtraHTTPHeaders({ cookie: claudeCookie })
+      }
+    } else {
+      browser = await chromium.launch({
+        headless: opts.headless,
+        executablePath: resolveChromiumExecutable(),
+        args: [
+          '--disable-blink-features=AutomationControlled',
+          '--disable-features=IsolateOrigins,site-per-process',
+          '--disable-site-isolation-trials'
+        ]
+      })
+      page = await browser.newPage({
+        userAgent:
+          'Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        viewport: { width: 1366, height: 768 }
+      })
+      const realHeaders: Record<string, string> = {
+        'sec-ch-ua': '"Not.A/Brand";v="24", "Chromium";v="122", "Google Chrome";v="122"',
+        'sec-ch-ua-platform': '"macOS"',
+        'sec-ch-ua-mobile': '?0',
+        'upgrade-insecure-requests': '1',
+        'accept-language': 'en-US,en;q=0.9',
+        accept:
+          'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7'
+      }
+      await page.setExtraHTTPHeaders(realHeaders)
+      await page.route('**/*', route => {
+        const headers = {
+          ...route.request().headers(),
+          ...realHeaders
+        }
+        route.continue({ headers })
+      })
+    }
     await page.addInitScript(() => {
       // Basic stealth to reduce bot-detection/CF challenges.
       Object.defineProperty(navigator, 'webdriver', { get: () => undefined })
@@ -1528,7 +1621,7 @@ async function scrape(
       Object.defineProperty(navigator, 'platform', { get: () => 'MacIntel' })
       Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] })
       Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 })
-      // @ts-expect-error
+      // @ts-expect-error: provide a minimal chrome runtime shim for stealth
       window.chrome = { runtime: {} }
     })
     if (!page) throw new Error('Failed to create browser page.')
@@ -1759,7 +1852,13 @@ async function scrape(
     }
     throw err
   } finally {
-    if (browser) await browser.close()
+    if (cdpBrowser) {
+      await cdpBrowser.close()
+    } else if (context) {
+      await context.close()
+    } else if (browser) {
+      await browser.close()
+    }
   }
 }
 
@@ -1798,6 +1897,10 @@ async function main(): Promise<void> {
     forgetGh,
     dryRun,
     yes,
+    claudeCookieFile,
+    claudeCookiePrompt,
+    claudeBrowserAssist,
+    claudeAttachWs,
     autoInstallGh,
     ghPagesRepo,
     ghPagesBranch,
@@ -1875,7 +1978,11 @@ async function main(): Promise<void> {
     const { title, markdown, retrievedAt } = await scrape(url, timeoutMs, provider, {
       waitForSelector,
       debug,
-      headless: effectiveHeadless
+      headless: effectiveHeadless,
+      claudeCookieFile,
+      claudeCookiePrompt,
+      claudeBrowserAssist,
+      claudeAttachWs
     })
     endLaunch()
     endOpen()
