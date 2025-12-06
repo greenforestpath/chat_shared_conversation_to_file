@@ -101,7 +101,11 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/csctf-*
+            dist/csctf-linux-x64
+            dist/csctf-linux-arm64
+            dist/csctf-macos-x64
+            dist/csctf-macos-arm64
+            dist/csctf-windows-x64.exe
             dist/csctf-*.sha256
             dist/sha256.txt
           generate_release_notes: true
