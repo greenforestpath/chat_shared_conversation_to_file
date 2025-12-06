@@ -27,8 +27,10 @@ class AppError extends Error {
   }
 }
 
+type MessageRole = 'assistant' | 'user' | 'system' | 'tool' | 'unknown'
+
 type ScrapedMessage = {
-  role: string
+  role: MessageRole
   html: string
 }
 
@@ -132,7 +134,7 @@ function ensureGhAvailable(autoInstall: boolean): void {
 }
 
 async function resolveGitHubToken(): Promise<string> {
-  const envToken = process.env.GITHUB_TOKEN
+  const envToken = process.env.GITHUB_TOKEN?.trim()
   if (envToken) return envToken
   if (!process.stdin.isTTY) {
     throw new Error('GITHUB_TOKEN is required for publishing (non-interactive). Set env var or run interactively.')
@@ -387,6 +389,9 @@ const headingSlug = (text: string, counts: Map<string, number>): string => {
   return existing === 0 ? finalBase : `${finalBase}-${existing}`
 }
 
+const stripProviderPrefix = (title: string): string =>
+  title.replace(/^(ChatGPT|Claude|Gemini|Grok)\s*-?\s*/i, '')
+
 export function renderHtmlDocument(markdown: string, title: string, source: string, retrieved: string): string {
   const counts = new Map<string, number>()
   const headings: { level: number; text: string; id: string }[] = []
@@ -420,17 +425,17 @@ export function renderHtmlDocument(markdown: string, title: string, source: stri
   }
 
   const body = md.render(markdown)
-  const safeTitle = md.utils.escapeHtml(title.replace(/^ChatGPT\s*-?\s*/i, ''))
+  const safeTitle = md.utils.escapeHtml(stripProviderPrefix(title))
   const safeSource = md.utils.escapeHtml(source)
   const safeRetrieved = md.utils.escapeHtml(retrieved)
 
+  const tocHeadings = headings.filter(h => h.level >= 2 && h.level <= 3)
   const toc =
-    headings.length > 0
+    tocHeadings.length > 0
       ? `<div class="toc">
     <h3>Contents</h3>
     <ul>
-      ${headings
-        .filter(h => h.level <= 3)
+      ${tocHeadings
         .map(h => `<li style="margin-left:${(h.level - 2) * 12}px"><a href="#${h.id}">${md.utils.escapeHtml(h.text)}</a></li>`)
         .join('\n')}
     </ul>
@@ -655,6 +660,9 @@ function parseArgs(args: string[]): ParsedArgs {
   if (htmlOnly && mdOnly) {
     throw new Error('Cannot combine --html-only and --md-only')
   }
+  if (htmlOnly && !generateHtml) {
+    throw new Error('Cannot combine --html-only and --no-html')
+  }
 
   return {
     url,
@@ -737,7 +745,7 @@ function usage(): void {
       `  [--open] [--copy] [--json] [--title "Custom Title"]`,
       `  [--check-updates] [--version] [--no-html] [--html-only] [--md-only]`,
       `  [--gh-pages-repo owner/name] [--gh-pages-branch gh-pages] [--gh-pages-dir dir]`,
-      `  [--remember] [--forget-gh-pages] [--dry-run] [--yes] [--help]`,
+      `  [--remember] [--forget-gh-pages] [--dry-run] [--yes] [--help] [--gh-install]`,
       '',
       'Common recipes:',
       `  Basic scrape (ChatGPT):   csctm https://chatgpt.com/share/<id>`,
@@ -898,6 +906,7 @@ async function attemptWithBackoff(fn: () => Promise<void>, timeoutMs: number, la
 
 function writeAtomic(target: string, content: string): void {
   const dir = path.dirname(target)
+  fs.mkdirSync(dir, { recursive: true })
   const tmp = path.join(dir, `.${path.basename(target)}.tmp-${Date.now()}`)
   try {
     fs.writeFileSync(tmp, content, 'utf8')
@@ -977,15 +986,24 @@ type PublishOpts = {
   entry: PublishHistoryItem
 }
 
-function resolveRepoUrl(repo: string): { repo: string; url: string } {
-  if (repo.startsWith('http')) return { repo, url: repo }
-  if (!repo.includes('/')) {
+function resolveRepoUrl(input: string): { repo: string; url: string } {
+  if (input.startsWith('http')) {
+    const u = new URL(input)
+    if (u.hostname !== 'github.com') {
+      throw new Error('Only GitHub HTTPS URLs are supported for --gh-pages-repo')
+    }
+    const parts = u.pathname.replace(/^\//, '').replace(/\.git$/, '').split('/')
+    if (parts.length !== 2) throw new Error('Repo URL must look like https://github.com/<owner>/<name>[.git]')
+    const repo = `${parts[0]}/${parts[1]}`
+    return { repo, url: `https://github.com/${repo}.git` }
+  }
+  if (!input.includes('/')) {
     const login = currentGhLogin()
     if (!login) throw new Error('Specify --gh-pages-repo as owner/name or ensure gh is logged in.')
-    const full = `${login}/${repo}`
+    const full = `${login}/${input}`
     return { repo: full, url: `https://github.com/${full}.git` }
   }
-  return { repo, url: `https://github.com/${repo}.git` }
+  return { repo: input, url: `https://github.com/${input}.git` }
 }
 
 function renderIndex(manifest: PublishHistoryItem[], title = 'csctm exports'): string {
@@ -1137,7 +1155,12 @@ export async function publishToGhPages(opts: PublishOpts): Promise<AppConfig> {
         if (create.status !== 0) {
           throw new Error('Failed to create repository via gh. Provide an existing repo with --gh-pages-repo owner/name.')
         }
-        cloned = attemptClone(branch)
+        // Clone newly created repo (default branch)
+        const createdClone = gitWithRetry(['clone', '--depth', '1', cleanUrl, tmp!], 'clone created repo')
+        if (createdClone !== 0) {
+          throw new Error('Failed to clone newly created repository.')
+        }
+        cloned = 0
       } else {
         throw new Error('Failed to clone repository. Ensure repo exists or install gh and set --gh-pages-repo owner/name.')
       }
@@ -1147,6 +1170,9 @@ export async function publishToGhPages(opts: PublishOpts): Promise<AppConfig> {
   if (cloned !== 0) {
     logProgress(`Creating branch ${branch}...`)
     safeRun(['checkout', '-b', branch])
+  } else if (branch) {
+    logProgress(`Switching to branch ${branch}...`)
+    safeRun(['checkout', '-B', branch])
   }
 
   const targetDir = path.join(tmp, dir)
@@ -1307,7 +1333,11 @@ async function scrape(
             '[data-testid*="message"]',
             'article [data-message-author-role]'
           ]
-        : ['article [data-message-author-role]']
+        : [
+            'article [data-message-author-role]',
+            'main [data-message-author-role]',
+            '[data-message-author-role]'
+          ]
     const selector = selectorSets.join(',')
 
     await attemptWithBackoff(
@@ -1350,8 +1380,19 @@ async function scrape(
               if (/user|human|you/.test(source)) return 'user'
               return 'unknown'
             }
+            const detected = (attrRole || inferRole()).toLowerCase()
+            const role: MessageRole =
+              detected === 'assistant'
+                ? 'assistant'
+                : detected === 'user'
+                ? 'user'
+                : detected === 'system'
+                ? 'system'
+                : detected === 'tool'
+                ? 'tool'
+                : 'unknown'
             return {
-              role: attrRole || inferRole(),
+              role,
               html: el.innerHTML
             }
           })
@@ -1372,7 +1413,17 @@ async function scrape(
     lines.push('')
 
     for (const msg of messages) {
-      lines.push(`## ${msg.role === 'assistant' ? 'Assistant' : 'User'}`)
+      const prettyRole =
+        msg.role === 'assistant'
+          ? 'Assistant'
+          : msg.role === 'user'
+          ? 'User'
+          : msg.role === 'system'
+          ? 'System'
+          : msg.role === 'tool'
+          ? 'Tool'
+          : 'Other'
+      lines.push(`## ${prettyRole}`)
       lines.push('')
       const htmlForTd = msg.html.replace(/<(?:br\s*\/?|\/p|\/div|\/section|\/article)>/gi, '$&\n')
       let markdown = td.turndown(htmlForTd)
@@ -1388,7 +1439,15 @@ async function scrape(
 }
 
 async function main(): Promise<void> {
-  const opts = parseArgs(process.argv.slice(2))
+  let opts: ParsedArgs
+  try {
+    opts = parseArgs(process.argv.slice(2))
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    console.error(chalk.red(`✖ ${message}`))
+    usage()
+    process.exit(1)
+  }
   const {
     url,
     timeoutMs,
@@ -1464,7 +1523,9 @@ async function main(): Promise<void> {
   const ghRepoResolved = ghPagesRepo ?? config.gh?.repo ?? DEFAULT_GH_REPO
   const ghBranchResolved = ghPagesBranch || config.gh?.branch || 'gh-pages'
   const ghDirResolved = ghPagesDir || config.gh?.dir || 'csctm'
-  const shouldPublish = Boolean(ghPagesRepo || config.gh || process.env.GITHUB_TOKEN)
+  const hasStoredGh = Boolean(config.gh)
+  const hasExplicitRepo = Boolean(ghPagesRepo)
+  const shouldPublish = hasExplicitRepo || hasStoredGh
   const shouldRemember = rememberGh || (!config.gh && shouldPublish)
 
   try {
@@ -1578,7 +1639,7 @@ async function main(): Promise<void> {
         dryRun,
         remember: shouldRemember,
         config,
-        entry: { title: title.replace(/^ChatGPT\s*-?\s*/i, ''), addedAt: retrievedAt }
+        entry: { title: stripProviderPrefix(title), addedAt: retrievedAt }
       })
       if (shouldRemember && !dryRun) {
         saveConfig(updatedConfig)
