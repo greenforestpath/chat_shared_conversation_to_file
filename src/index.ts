@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { chromium, type Browser } from 'playwright-chromium'
+import { chromium, type Browser, type Page } from 'playwright-chromium'
 import TurndownService, { type Rule } from 'turndown'
 import fs from 'fs'
 import path from 'path'
@@ -19,6 +19,32 @@ const PROVIDER_PATTERNS: { id: Provider; patterns: RegExp[] }[] = [
   { id: 'grok', patterns: [/grok\.com$/i, /grok\.x\.ai$/i] },
   { id: 'chatgpt', patterns: [/chatgpt\.com$/i, /openai\.com$/i, /share\.chatgpt\.com$/i] }
 ]
+const PROVIDER_SELECTOR_CANDIDATES: Record<Provider, string[][]> = {
+  chatgpt: [
+    ['article [data-message-author-role]'],
+    ['[data-message-author-role]'],
+    ['main article'],
+    ['article']
+  ],
+  claude: [
+    ['main [data-testid="message"]', 'main [data-testid="message-row"]', '[data-testid="chat-message"]'],
+    ['article [data-message-author-role]'],
+    ['[data-message-author-role]'],
+    ['main article']
+  ],
+  gemini: [
+    ['main [data-message-author-role]', 'main [data-author-role]', 'main [data-utterance]'],
+    ['main [data-testid*="message"]', '[data-testid*="message"]'],
+    ['article [data-message-author-role]'],
+    ['article', 'section', '[role="article"]']
+  ],
+  grok: [
+    ['main [data-testid*="message"]', '[data-testid*="message"]'],
+    ['main [data-message-author-role]', 'main [data-author]'],
+    ['article [data-message-author-role]'],
+    ['article', 'section', '[role="article"]']
+  ]
+}
 class AppError extends Error {
   hint?: string
   constructor(message: string, hint?: string) {
@@ -37,6 +63,7 @@ type ScrapedMessage = {
 type CliOptions = {
   timeoutMs: number
   outfile?: string
+  outputDir?: string
   quiet: boolean
   verbose: boolean
   format: 'both' | 'md' | 'html'
@@ -44,7 +71,10 @@ type CliOptions = {
   copy: boolean
   json: boolean
   titleOverride?: string
+  debug: boolean
+  waitForSelector?: string
   checkUpdates: boolean
+  skipUpdates: boolean
   versionOnly: boolean
   generateHtml: boolean
   htmlOnly: boolean
@@ -433,6 +463,16 @@ const headingSlug = (text: string, counts: Map<string, number>): string => {
   return existing === 0 ? finalBase : `${finalBase}-${existing}`
 }
 
+const escapeHtml = (value: string): string =>
+  value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+    .replace(/\//g, '&#47;')
+    .replace(/\r?\n/g, '<br>')
+
 const stripProviderPrefix = (title: string): string =>
   title.replace(/^(ChatGPT|Claude|Gemini|Grok)\s*-?\s*/i, '')
 
@@ -469,9 +509,9 @@ export function renderHtmlDocument(markdown: string, title: string, source: stri
   }
 
   const body = md.render(markdown)
-  const safeTitle = md.utils.escapeHtml(stripProviderPrefix(title))
-  const safeSource = md.utils.escapeHtml(source)
-  const safeRetrieved = md.utils.escapeHtml(retrieved)
+  const safeTitle = escapeHtml(stripProviderPrefix(title))
+  const safeSource = escapeHtml(source)
+  const safeRetrieved = escapeHtml(retrieved)
 
   const tocHeadings = headings.filter(h => h.level >= 2 && h.level <= 3)
   const toc =
@@ -480,7 +520,7 @@ export function renderHtmlDocument(markdown: string, title: string, source: stri
     <h3>Contents</h3>
     <ul>
       ${tocHeadings
-        .map(h => `<li style="margin-left:${(h.level - 2) * 12}px"><a href="#${h.id}">${md.utils.escapeHtml(h.text)}</a></li>`)
+        .map(h => `<li style="margin-left:${(h.level - 2) * 12}px"><a href="#${h.id}">${escapeHtml(h.text)}</a></li>`)
         .join('\n')}
     </ul>
   </div>`
@@ -537,6 +577,7 @@ function parseArgs(args: string[]): ParsedArgs {
   let url = ''
   let timeoutMs = DEFAULT_TIMEOUT_MS
   let outfile: string | undefined
+  let outputDir: string | undefined
   let quiet = false
   let verbose = false
   let format: 'both' | 'md' | 'html' = 'both'
@@ -544,7 +585,10 @@ function parseArgs(args: string[]): ParsedArgs {
   let copy = false
   let json = false
   let titleOverride: string | undefined
+  let debug = false
+  let waitForSelector: string | undefined
   let checkUpdates = false
+  let skipUpdates = false
   let versionOnly = false
   let generateHtml = true
   let htmlOnly = false
@@ -569,6 +613,10 @@ function parseArgs(args: string[]): ParsedArgs {
         break
       case '--outfile':
         outfile = args[i + 1]
+        i += 1
+        break
+      case '--output-dir':
+        outputDir = args[i + 1]
         i += 1
         break
       case '--quiet':
@@ -613,8 +661,23 @@ function parseArgs(args: string[]): ParsedArgs {
           throw new AppError('--title requires a value')
         }
         break
+      case '--wait-for-selector':
+        if (i + 1 < args.length && !args[i + 1].startsWith('-')) {
+          waitForSelector = args[i + 1]
+          i += 1
+        } else {
+          throw new AppError('--wait-for-selector requires a CSS selector')
+        }
+        break
+      case '--debug':
+        debug = true
+        break
       case '--check-updates':
         checkUpdates = true
+        break
+      case '--no-check-updates':
+        skipUpdates = true
+        checkUpdates = false
         break
       case '--version':
       case '-v':
@@ -712,6 +775,7 @@ function parseArgs(args: string[]): ParsedArgs {
     url,
     timeoutMs,
     outfile,
+    outputDir,
     quiet,
     verbose,
     format,
@@ -719,7 +783,10 @@ function parseArgs(args: string[]): ParsedArgs {
     copy,
     json,
     titleOverride,
+    debug,
+    waitForSelector,
     checkUpdates,
+    skipUpdates,
     versionOnly,
     generateHtml,
     htmlOnly,
@@ -785,9 +852,9 @@ function usage(): void {
   console.log(
     [
       `Usage: csctm <chatgpt|claude|gemini|grok-share-url>`,
-      `  [--timeout-ms 60000] [--outfile path] [--quiet] [--verbose] [--format both|md|html]`,
-      `  [--open] [--copy] [--json] [--title "Custom Title"]`,
-      `  [--check-updates] [--version] [--no-html] [--html-only] [--md-only]`,
+      `  [--timeout-ms 60000] [--outfile path|--output-dir dir] [--quiet] [--verbose] [--format both|md|html]`,
+      `  [--open] [--copy] [--json] [--title "Custom Title"] [--wait-for-selector "<css>"] [--debug]`,
+      `  [--check-updates|--no-check-updates] [--version] [--no-html] [--html-only] [--md-only]`,
       `  [--gh-pages-repo owner/name] [--gh-pages-branch gh-pages] [--gh-pages-dir dir]`,
       `  [--remember] [--forget-gh-pages] [--dry-run] [--yes] [--help] [--gh-install]`,
       '',
@@ -901,7 +968,12 @@ async function checkForUpdates(currentVersion: string, quiet: boolean): Promise<
     // ignore cache errors
   }
   try {
-    const res = await fetch(latestUrl, { headers: { Accept: 'application/vnd.github+json' } })
+    const res = await fetch(latestUrl, {
+      headers: {
+        Accept: 'application/vnd.github+json',
+        'User-Agent': `csctm/${currentVersion}`
+      }
+    })
     if (!res.ok) {
       if (!quiet) console.log(chalk.gray('Skipped update check (GitHub unavailable).'))
       return
@@ -934,12 +1006,14 @@ async function attemptWithBackoff(fn: () => Promise<void>, timeoutMs: number, la
   const baseDelay = 500
   const deadline = Date.now() + timeoutMs
   let lastErr: unknown
+  let tries = 0
   for (let i = 0; i < attempts; i += 1) {
     try {
       await fn()
       return
     } catch (err) {
       lastErr = err
+      tries += 1
       if (i < attempts - 1) {
         const delay = baseDelay * (i + 1)
         if (Date.now() + delay > deadline) break
@@ -947,7 +1021,8 @@ async function attemptWithBackoff(fn: () => Promise<void>, timeoutMs: number, la
       }
     }
   }
-  throw new Error(`Failed after ${attempts} attempts while ${label}. Last error: ${lastErr}`)
+  const made = Math.max(tries, 1)
+  throw new Error(`Failed after ${made} attempt${made === 1 ? '' : 's'} while ${label}. Last error: ${lastErr}`)
 }
 
 function writeAtomic(target: string, content: string): void {
@@ -1053,15 +1128,14 @@ function resolveRepoUrl(input: string): { repo: string; url: string } {
 }
 
 function renderIndex(manifest: PublishHistoryItem[], title = 'csctm exports'): string {
-  const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   const cards = manifest
     .map(item => {
       const mdLink = item.md ? `<a href="./${encodeURIComponent(item.md)}">Markdown</a>` : ''
       const htmlLink = item.html ? `<a href="./${encodeURIComponent(item.html)}">HTML</a>` : ''
       const links = [htmlLink, mdLink].filter(Boolean).join(' • ')
       return `<div class="card">
-  <div class="card-title">${esc(item.title)}</div>
-  <div class="card-meta">Added: ${esc(item.addedAt)}</div>
+  <div class="card-title">${escapeHtml(item.title)}</div>
+  <div class="card-meta">Added: ${escapeHtml(item.addedAt)}</div>
   <div class="card-links">${links}</div>
 </div>`
     })
@@ -1072,7 +1146,7 @@ function renderIndex(manifest: PublishHistoryItem[], title = 'csctm exports'): s
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>${title}</title>
+  <title>${escapeHtml(title)}</title>
   <style>
     :root { color-scheme: light dark; }
     body { font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background: #0f172a; margin: 0; padding: 32px; color: #e2e8f0; }
@@ -1092,7 +1166,7 @@ function renderIndex(manifest: PublishHistoryItem[], title = 'csctm exports'): s
   </style>
 </head>
 <body>
-  <h1>${title}</h1>
+  <h1>${escapeHtml(title)}</h1>
   <div class="grid">
     ${cards}
   </div>
@@ -1179,7 +1253,11 @@ export async function publishToGhPages(opts: PublishOpts): Promise<AppConfig> {
       lastStatus = res.status ?? 1
       if (lastStatus === 0) return 0
       if (!quiet) console.log(chalk.gray(`   retrying ${label} (${i + 1}/${attempts})...`))
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs)
+      const waitMs = Math.min(2000, delayMs * (i + 1))
+      const start = Date.now()
+      while (Date.now() - start < waitMs) {
+        // busy-wait fallback for environments without timers in spawn context
+      }
     }
     return lastStatus
   }
@@ -1335,25 +1413,43 @@ function detectProvider(url: string): Provider {
 async function scrape(
   url: string,
   timeoutMs: number,
-  provider: Provider
+  provider: Provider,
+  opts: { waitForSelector?: string; debug?: boolean }
 ): Promise<{ title: string; markdown: string; retrievedAt: string }> {
   const td = buildTurndown()
   let browser: Browser | null = null
+  let page!: Page
+  const dumpDebug = async (): Promise<string | null> => {
+    if (!opts.debug || !page) return null
+    try {
+      const html = await page.content()
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'csctm-debug-'))
+      const file = path.join(dir, 'page.html')
+      fs.writeFileSync(file, html, 'utf8')
+      return file
+    } catch {
+      return null
+    }
+  }
 
   try {
     browser = await chromium.launch({ headless: true })
-    const page = await browser.newPage({
+    page = await browser.newPage({
       userAgent:
         'Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36'
     })
+    if (!page) throw new Error('Failed to create browser page.')
 
+    // Stage 1: quick DOM load
     await attemptWithBackoff(
       async () => {
-        await page.goto(url, { waitUntil: 'networkidle', timeout: timeoutMs })
+        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: Math.max(10000, timeoutMs / 2) })
       },
       timeoutMs,
       'loading the share URL (check that the link is public and reachable)'
     )
+    // Stage 2: try to reach network-idle, but don't hang forever
+    await page.waitForLoadState('networkidle', { timeout: Math.max(3000, timeoutMs / 4) }).catch(() => {})
 
     // Fast-fail on common bot-block/CF challenges so we don't hang forever.
     const bodyText = (await page.textContent('body').catch(() => '')) || ''
@@ -1393,7 +1489,7 @@ async function scrape(
             'main [data-message-author-role]',
             '[data-message-author-role]'
           ]
-    const selector = selectorSets.join(',')
+    const selector = opts.waitForSelector ?? selectorSets.join(',')
 
     await attemptWithBackoff(
       async () => {
@@ -1454,7 +1550,14 @@ async function scrape(
           .filter(Boolean)
     )) as ScrapedMessage[]
 
-    if (!messages.length) throw new Error('No messages were found in the shared conversation.')
+    if (!messages.length) {
+      const dumpPath = await dumpDebug()
+      const hint =
+        dumpPath
+          ? `Debug HTML saved to ${dumpPath}.`
+          : 'Is the link public? Try opening it in a browser first.'
+      throw new AppError('No messages were found in the shared conversation.', hint)
+    }
 
     const lines: string[] = []
     const titleWithoutPrefix = title.replace(/^(ChatGPT|Claude|Gemini|Grok)\s*-?\s*/i, '')
@@ -1488,6 +1591,12 @@ async function scrape(
     }
 
     return { title, markdown: normalizeLineTerminators(lines.join('\n')), retrievedAt }
+  } catch (err) {
+    const dumpPath = await dumpDebug()
+    if (dumpPath) {
+      console.error(chalk.gray(`Debug page saved to ${dumpPath}`))
+    }
+    throw err
   } finally {
     if (browser) await browser.close()
   }
@@ -1507,6 +1616,7 @@ async function main(): Promise<void> {
     url,
     timeoutMs,
     outfile,
+    outputDir,
     quiet,
     verbose,
     format,
@@ -1514,7 +1624,10 @@ async function main(): Promise<void> {
     copy,
     json,
     titleOverride,
+    debug,
+    waitForSelector,
     checkUpdates,
+    skipUpdates,
     versionOnly,
     generateHtml,
     htmlOnly,
@@ -1561,9 +1674,19 @@ async function main(): Promise<void> {
     forgetGhConfig()
   }
   const config = forgetGh ? {} : loadConfig()
-  // Resolve desired formats
-  let produceMd = format !== 'html' && !htmlOnly
-  let produceHtml = format !== 'md' && generateHtml && !mdOnly
+  // Resolve desired formats (format flag takes precedence over html/md-only flags)
+  let produceMd: boolean
+  let produceHtml: boolean
+  if (format === 'md') {
+    produceMd = true
+    produceHtml = false
+  } else if (format === 'html') {
+    produceMd = false
+    produceHtml = true
+  } else {
+    produceMd = !htmlOnly
+    produceHtml = !mdOnly && generateHtml
+  }
   if (!produceMd && !produceHtml) {
     fail('At least one output format is required (Markdown and/or HTML).')
     process.exit(1)
@@ -1590,22 +1713,33 @@ async function main(): Promise<void> {
       (produceMd ? 1 : 0) +
       (produceHtml ? 1 : 0) +
       (quiet ? 0 : 1) + // location print
-    (shouldPublish ? 1 : 0) +
-      (checkUpdates ? 1 : 0)
+      (shouldPublish ? 1 : 0) +
+      (checkUpdates && !skipUpdates ? 1 : 0)
     let idx = 1
 
     const endLaunch = step(idx++, totalSteps, 'Launching headless Chromium')
     const endOpen = step(idx++, totalSteps, 'Opening share link')
-    const { title, markdown, retrievedAt } = await scrape(url, timeoutMs, provider)
+    const { title, markdown, retrievedAt } = await scrape(url, timeoutMs, provider, {
+      waitForSelector,
+      debug
+    })
     endLaunch()
     endOpen()
 
     const endConvert = step(idx++, totalSteps, 'Converting to Markdown')
-    const name = slugify((titleOverride || title).replace(/^(ChatGPT|Claude|Gemini|Grok)\s*-?\s*/i, ''))
-    const resolvedOutfile = outfile ? path.resolve(outfile) : path.join(process.cwd(), `${name}.md`)
+    const datePrefix = new Date().toISOString().slice(0, 10)
+    const baseTitle = titleOverride || title
+    const name = `${datePrefix}-${provider}-${slugify(baseTitle.replace(/^(ChatGPT|Claude|Gemini|Grok)\s*-?\s*/i, ''))}`
+    const resolvedOutfile = outputDir
+      ? path.resolve(outputDir)
+      : outfile
+      ? path.resolve(outfile)
+      : path.join(process.cwd(), `${name}.md`)
     const outfileStat = fs.existsSync(resolvedOutfile) ? fs.statSync(resolvedOutfile) : null
     const isDirLike =
-      (outfile && outfile.endsWith(path.sep)) || (outfileStat && outfileStat.isDirectory())
+      (outputDir ?? outfile)?.endsWith(path.sep) ||
+      (outfileStat && outfileStat.isDirectory()) ||
+      (outputDir ? !outfileStat : false)
 
     const baseDir = isDirLike ? resolvedOutfile : path.dirname(resolvedOutfile)
     const baseName = isDirLike
@@ -1702,7 +1836,7 @@ async function main(): Promise<void> {
       endPublish()
     }
 
-    if (checkUpdates) {
+    if (checkUpdates && !skipUpdates) {
       const endUpdates = step(idx++, totalSteps, 'Checking for updates')
       await checkForUpdates(pkg.version, quiet)
       endUpdates()
