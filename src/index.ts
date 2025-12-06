@@ -591,10 +591,11 @@ const DONE = (quiet: boolean) => (msg: string, elapsedMs?: number) => {
 function usage(): void {
   console.log(
     [
-      `Usage: csctm <chatgpt-share-url> [--timeout-ms 60000] [--outfile path] [--quiet] [--check-updates] [--version] [--no-html] [--html-only] [--md-only] [--gh-pages-repo owner/name] [--gh-pages-branch gh-pages] [--gh-pages-dir dir] [--remember] [--forget-gh-pages] [--dry-run] [--yes]`,
+      `Usage: csctm <chatgpt|claude-share-url> [--timeout-ms 60000] [--outfile path] [--quiet] [--check-updates] [--version] [--no-html] [--html-only] [--md-only] [--gh-pages-repo owner/name] [--gh-pages-branch gh-pages] [--gh-pages-dir dir] [--remember] [--forget-gh-pages] [--dry-run] [--yes]`,
       '',
       'Common recipes:',
-      `  Basic scrape (MD + HTML): csctm https://chatgpt.com/share/<id>`,
+      `  Basic scrape (ChatGPT):   csctm https://chatgpt.com/share/<id>`,
+      `  Basic scrape (Claude):    csctm https://claude.ai/share/<id>`,
       `  Longer timeout:           csctm <url> --timeout-ms 90000`,
       `  Markdown only:            csctm <url> --md-only`,
       `  HTML only:                csctm <url> --html-only`,
