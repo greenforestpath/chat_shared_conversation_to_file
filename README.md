@@ -18,17 +18,26 @@ curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/chatgpt_shared_co
 
 ---
 
-## ✨ What it does
-- Launches headless Chromium (playwright-chromium) to load a ChatGPT share link.
-- Extracts every turn (user/assistant) and converts HTML → Markdown with fenced code blocks and detected languages.
-- Cleans citation pills/metadata, normalizes line terminators, trims extra blank lines.
-- Saves `<conversation_title>.md` in the working directory (slugified; auto-appends `_2`, `_3`, … if the name exists).
-- Prints clear, colorized progress (`[1/6] Launching headless Chromium`, etc.).
+## ✨ Highlights
+- **Zero-setup binaries**: Installer prefers published release binaries per-OS; falls back to Bun source build automatically.
+- **Accurate Markdown**: Preserves fenced code blocks with detected language, strips citation pills, normalizes whitespace and line terminators.
+- **Deterministic filenames**: Slugifies the conversation title and auto-increments to avoid clobbering existing files.
+- **Readable progress**: Colorized, step-based console output powered by `chalk`.
 
-## 🚀 Quick install (curl | bash)
-- Default install to `~/.local/bin` (or `/usr/local/bin` with `DEST`/`--system`).
-- Prefers the latest release binary for your platform; falls back to Bun source build if needed.
+## 🧭 Usage
+```bash
+csctm <chatgpt-share-url>
+csctm https://chatgpt.com/share/69343092-91ac-800b-996c-7552461b9b70
+```
+
+What you’ll see:
+- Headless Chromium launch (first run downloads the Playwright bundle).
+- `✔ Saved <file>.md` plus the absolute path.
+
+## 🚀 Install (curl | bash)
+- Default install to `~/.local/bin`; `DEST=/custom/path` or `--system` for `/usr/local/bin`.
 - Adds PATH hints when `--easy-mode` is used.
+- Windows: use Git Bash or WSL for the installer; native Windows binary is also produced in `dist/`.
 
 Examples:
 ```bash
@@ -42,24 +51,21 @@ curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/chatgpt_shared_co
 curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/chatgpt_shared_conversation_to_markdown_file/main/install.sh | bash -s -- --system
 ```
 
-> Windows: use Git Bash or WSL for the installer; otherwise build locally with Bun and use the Windows binary produced in `dist/`.
-
-## 🧭 Usage
-```bash
-csctm <chatgpt-share-url>
-csctm https://chatgpt.com/share/69343092-91ac-800b-996c-7552461b9b70
-```
-
-What you’ll see:
-- `✔ Saved <file>.md` and the full path.
-- First run downloads the Playwright Chromium bundle into the Playwright cache.
-
 ## 🗂️ Output shape
-- Title line: `# ChatGPT Conversation: <title>`
-- Source + Retrieved timestamps
-- Sections per message: `## User` / `## Assistant`
-- Code blocks preserved with language hints when present: ```` ```python ... ``` ````
-- Line endings normalized to `\n`; Unicode LS/PS stripped.
+- Title: `# ChatGPT Conversation: <title>`
+- Metadata: `Source: <url>`, `Retrieved: <iso8601>`
+- Per message: `## User` / `## Assistant`
+- Code fences: language preserved when present (```` ```python ... ``` ````)
+- Newlines: normalized to `\n`; Unicode LS/PS removed.
+
+## 🔍 How it works (pipeline)
+1. Validate URL and print usage on `-h/--help`.
+2. Launch headless Chromium (`playwright-chromium`) with a desktop UA.
+3. Wait for `article [data-message-author-role]` to ensure content is present.
+4. Extract role + inner HTML for each message.
+5. Turndown + custom code-block rule → Markdown.
+6. Clean citations, normalize whitespace and line terminators.
+7. Slugify title, pick a non-conflicting filename, write to disk.
 
 ## 🛠️ Local build & dev
 ```bash
@@ -80,8 +86,8 @@ bun run build:windows-x64     # dist/csctm-windows-x64.exe
 bun run build:all
 ```
 
-## 🧪 End-to-end smoke (optional, networked)
-Uses the public share link above to verify a full scrape → Markdown. Requires network + headless Chromium download.
+## 🧪 End-to-end smoke (networked)
+Uses the public share link above to verify scrape → Markdown. Requires network + Playwright download.
 ```bash
 CSCTM_E2E=1 bun run test:e2e   # builds binary, runs against the shared URL
 ```
@@ -89,23 +95,40 @@ CSCTM_E2E=1 bun run test:e2e   # builds binary, runs against the shared URL
 Checks performed:
 - Binary exits 0
 - Produces a `.md` file
-- File is non-trivially large (length and line-count thresholds)
-- Contains expected headers/source URL
+- File length and line-count exceed minimums
+- Contains expected header/source URL
 - No stray CR-only line endings or disallowed Unicode separators
 
 ## ⚙️ CI & releases
-- GitHub Actions: lint → typecheck → test on Ubuntu; then native builds on macOS, Linux, Windows; artifacts uploaded per-OS.
+- Workflow: lint → typecheck → unit tests → e2e scrape (Ubuntu) → matrix builds (macOS/Linux/Windows) → upload artifacts.
 - Tagged pushes (`v*`) create a GitHub release via `gh release create` and attach built binaries.
+- Playwright browsers are cached between e2e runs to speed up CI.
 
 ## 📦 Artifacts & install destinations
-- `dist/csctm` (macOS/Linux), `dist/csctm.exe` (Windows).
-- Installer defaults to `~/.local/bin`; use `--system` for `/usr/local/bin` or `DEST=/custom/path`.
+- Binaries: `dist/csctm` (macOS/Linux), `dist/csctm.exe` (Windows).
+- Installer default: `~/.local/bin`; override with `DEST` or `--system`.
+
+## 📋 Flags & env (installer)
+- `VERSION=vX.Y.Z` pin a tag; otherwise resolves `latest`.
+- `DEST=/path` install target (default `~/.local/bin`; `--system` → `/usr/local/bin`).
+- `--from-source` force Bun build (requires `bun`, `git`).
+- `--easy-mode` append PATH hints to common shells when possible.
 
 ## 🧰 Troubleshooting
-- **Playwright download slow?** Pre-populate the Playwright cache (`PLAYWRIGHT_BROWSERS_PATH`) or re-run after the first download completes.
+- **Playwright download slow?** Pre-populate `PLAYWRIGHT_BROWSERS_PATH` or rerun after first download completes.
 - **Binary not on PATH?** Add `~/.local/bin` (or your `DEST`) to PATH; re-open the shell.
-- **Share page layout changes?** Open an issue with the share URL; the scraper waits for `article [data-message-author-role]` and may need selectors updated.
-- **Need to force source build?** `--from-source` (requires Bun + git).
+- **Share layout changed?** The scraper waits for `article [data-message-author-role]`; open an issue with the share URL so selectors can be updated.
+- **Need to force source build?** Use `--from-source` (Bun + git required).
+
+## ❓ FAQ
+- **Where do the binaries come from?** CI builds macOS/Linux/Windows artifacts on tagged releases; the installer fetches from the latest tag (`releases/latest`) unless you pin `VERSION=vX.Y.Z`.
+- **How are filenames generated?** Conversation titles are lowercased, non-alphanumerics → `_`, trimmed of leading/trailing `_`; collisions append `_2`, `_3`, ….
+- **Where does Playwright cache browsers?** Default: `~/.cache/ms-playwright` (Linux/macOS) or `%USERPROFILE%\\AppData\\Local\\ms-playwright` (Windows). CI caches this directory between runs.
+- **Why does first run take longer?** Playwright downloads Chromium once. Subsequent runs reuse the cached browser bundle.
+- **Can I run headful?** Not currently; the tool is headless-only for speed and determinism.
+- **Can I change the user agent or selectors?** Edit `src/index.ts` (`chromium.launch` options and `page.waitForSelector` target) and rebuild.
+- **How do I verify installs?** Run `csctm --help` and invoke the bundled E2E: `CSCTM_E2E=1 bun run test:e2e` (network + browser download required).
+- **Which Markdown rules are customized?** A turndown rule injects fenced code blocks with detected language from `class="language-..."`; citation pills and data-start/end attributes are stripped.
 
 ## 📜 License
 MIT
