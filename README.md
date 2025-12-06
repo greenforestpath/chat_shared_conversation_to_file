@@ -30,7 +30,7 @@ csctm <chatgpt-share-url> \
   [--timeout-ms 60000] [--outfile path] [--quiet] [--check-updates] [--version] \
   [--no-html] [--html-only] [--md-only] \
   [--gh-pages-repo owner/name] [--gh-pages-branch gh-pages] [--gh-pages-dir csctm] \
-  [--remember] [--forget-gh-pages] [--dry-run] [--yes]
+  [--remember] [--forget-gh-pages] [--dry-run] [--yes] [--gh-install]
 
 csctm https://chatgpt.com/share/69343092-91ac-800b-996c-7552461b9b70 --timeout-ms 90000
 ```
@@ -115,7 +115,8 @@ Checks performed:
   GITHUB_TOKEN=... csctm <share-url> \
     --gh-pages-repo youruser/my_shared_chatgpt_conversations \
     --gh-pages-branch gh-pages \
-    --gh-pages-dir csctm
+    --gh-pages-dir csctm \
+    --gh-install    # optionally auto-install gh if missing (brew/apt/winget/choco)
   ```
 - You’ll see a summary and must type `PROCEED` to publish (or pass `--yes`).
 - Use `--remember` to persist repo/branch/dir for next runs; `--forget-gh-pages` to clear.

@@ -62,6 +62,68 @@ type AppConfig = {
   history?: PublishHistoryItem[]
 }
 
+function ensureGhAvailable(autoInstall: boolean): void {
+  const hasGh = isGhCliAvailable()
+  if (hasGh) return
+  if (!autoInstall) {
+    throw new Error(
+      'GitHub CLI (gh) is required for publishing. Install it (brew install gh / apt install gh / winget install GitHub.cli) or pass --gh-install to auto-attempt.'
+    )
+  }
+  const platform = os.platform()
+  const tryInstall = (cmd: string[], label: string) => {
+    const res = spawnSync(cmd[0], cmd.slice(1), { stdio: 'inherit' })
+    if (res.status !== 0) {
+      throw new Error(`Failed to install gh via ${label}. Install manually and retry.`)
+    }
+  }
+  if (platform === 'darwin') {
+    tryInstall(['brew', 'install', 'gh'], 'brew')
+  } else if (platform === 'linux') {
+    if (spawnSync('apt-get', ['--version']).status === 0) {
+      tryInstall(['sudo', 'apt-get', 'update'], 'apt-get update')
+      tryInstall(['sudo', 'apt-get', 'install', '-y', 'gh'], 'apt-get install gh')
+    } else if (spawnSync('dnf', ['--version']).status === 0) {
+      tryInstall(['sudo', 'dnf', 'install', '-y', 'gh'], 'dnf install gh')
+    } else if (spawnSync('yum', ['--version']).status === 0) {
+      tryInstall(['sudo', 'yum', 'install', '-y', 'gh'], 'yum install gh')
+    } else {
+      throw new Error('Unsupported Linux package manager for auto gh install. Install gh manually.')
+    }
+  } else if (platform === 'win32') {
+    if (spawnSync('winget', ['--version']).status === 0) {
+      tryInstall(['winget', 'install', '--id', 'GitHub.cli', '-e', '--silent'], 'winget')
+    } else if (spawnSync('choco', ['--version']).status === 0) {
+      tryInstall(['choco', 'install', '-y', 'gh'], 'choco')
+    } else {
+      throw new Error('Install gh manually on Windows (winget install GitHub.cli).')
+    }
+  } else {
+    throw new Error('Unsupported platform for auto gh install. Install gh manually.')
+  }
+  if (!isGhCliAvailable()) {
+    throw new Error('gh installation did not succeed. Install manually and retry.')
+  }
+}
+
+async function resolveGitHubToken(): Promise<string> {
+  const envToken = process.env.GITHUB_TOKEN
+  if (envToken) return envToken
+  if (!process.stdin.isTTY) {
+    throw new Error('GITHUB_TOKEN is required for publishing (non-interactive). Set env var or run interactively.')
+  }
+  console.log(
+    chalk.yellow(
+      'No GITHUB_TOKEN found. Paste a token with repo write access (recommended: classic token with repo scope or fine-grained with contents:write). Input is not stored on disk.'
+    )
+  )
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+  const token: string = await new Promise(resolve => rl.question('GITHUB_TOKEN: ', resolve))
+  rl.close()
+  if (!token.trim()) throw new Error('Empty token provided.')
+  return token.trim()
+}
+
 function loadConfig(): AppConfig {
   try {
     if (!fs.existsSync(CONFIG_PATH)) return {}
@@ -694,8 +756,7 @@ function renderIndex(manifest: PublishHistoryItem[], title = 'csctm exports'): s
 
 async function publishToGhPages(opts: PublishOpts): Promise<AppConfig> {
   const { files, repo, branch, dir, quiet, dryRun, remember, config, entry } = opts
-  const token = process.env.GITHUB_TOKEN
-  if (!token) throw new Error('GITHUB_TOKEN is required for gh-pages publishing.')
+  const token = await resolveGitHubToken()
 
   const { repo: repoName, url } = resolveRepoUrl(repo)
   const urlWithToken = url.replace('https://', `https://${token}@`)
@@ -907,6 +968,7 @@ async function main(): Promise<void> {
     forgetGh,
     dryRun,
     yes,
+    autoInstallGh,
     ghPagesRepo,
     ghPagesBranch,
     ghPagesDir
@@ -998,6 +1060,7 @@ async function main(): Promise<void> {
         `Repo: ${ghRepoResolved}  Branch: ${ghBranchResolved}  Dir: ${ghDirResolved}`
       ].join('\n')
       await confirmPublish(publishSummary, yes)
+      ensureGhAvailable(autoInstallGh)
       step(idx++, totalSteps, chalk.cyan('Publishing to GitHub Pages'))
       const updatedConfig = await publishToGhPages({
         files: writtenFiles,

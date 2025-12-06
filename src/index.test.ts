@@ -1,4 +1,4 @@
-// @ts-nocheck
+/// <reference types="bun-types" />
 import { describe, expect, it } from "bun:test";
 import { mkdtempSync, writeFileSync } from "fs";
 import os from "os";

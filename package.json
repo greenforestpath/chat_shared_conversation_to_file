@@ -34,6 +34,7 @@
     "@types/markdown-it": "^14.1.2",
     "@types/turndown": "^5.0.6",
     "eslint": "^9.39.1",
+    "bun-types": "^1.0.9",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.48.1"
   }
