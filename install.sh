@@ -251,5 +251,5 @@ fi
 log_step "Ensuring ${DEST} is on PATH"
 maybe_add_path
 log_step "Finalizing"
-ok "Done. Run: ${BINARY} <share-url (ChatGPT|Claude|Gemini|Grok)>"
+ok "Done. Run: ${BINARY} <share-url (ChatGPT|Gemini|Grok)>"
 

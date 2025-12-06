@@ -8,8 +8,6 @@ import { spawnSync } from "child_process";
 const RUN_E2E = process.env.CSCTF_E2E === "1";
 const SHARE_URL =
   process.env.CSCTF_E2E_URL ?? "https://chatgpt.com/share/69343092-91ac-800b-996c-7552461b9b70";
-const CLAUDE_URL =
-  process.env.CSCTF_E2E_CLAUDE_URL ?? "https://claude.ai/share/a957d022-c2f1-4efb-ac58-81395f4331fe";
 const GEMINI_URL =
   process.env.CSCTF_E2E_GEMINI_URL ?? "https://gemini.google.com/share/66d944b0e6b9";
 const GROK_URL =
@@ -22,7 +20,6 @@ const E2E_TIMEOUT_MS = process.env.CSCTF_E2E_TIMEOUT_MS ?? "60000";
 
 const TEST_TIMEOUT_MS = Number.parseInt(process.env.CSCTF_E2E_TEST_TIMEOUT_MS ?? "120000", 10);
 const describeFn = RUN_E2E ? describe : describe.skip;
-const describeClaude = RUN_E2E ? describe : describe.skip;
 const describeGemini = RUN_E2E ? describe : describe.skip;
 const describeGrok = RUN_E2E ? describe : describe.skip;
 
@@ -89,59 +86,6 @@ describeFn("csctf end-to-end", () => {
     expect(html).toContain("<article class=\"article\">");
     expect(html).toContain("Source:");
     expect(html).not.toMatch(/<script/i); // ensure no JS in output
-    expect(html).toContain("<style>");
-  }, TEST_TIMEOUT_MS);
-});
-
-describeClaude("csctf end-to-end (Claude share)", () => {
-  let tmpDir: string;
-
-  beforeAll(() => {
-    tmpDir = mkdtempSync(path.join(os.tmpdir(), "csctf-e2e-claude-"));
-    const build = spawnSync("bun", ["run", "build"], {
-      cwd: ROOT,
-      stdio: "inherit"
-    });
-    if (build.status !== 0) {
-      throw new Error("Build failed");
-    }
-  });
-
-  afterAll(() => {
-    rmSync(tmpDir, { recursive: true, force: true });
-  });
-
-  it("scrapes the Claude shared conversation into valid outputs", () => {
-    const run = spawnSync(BIN_PATH, [CLAUDE_URL as string], {
-      cwd: tmpDir,
-      stdio: "inherit"
-    });
-    expect(run.status).toBe(0);
-
-    const mdFiles = readdirSync(tmpDir).filter(f => f.endsWith(".md"));
-    const htmlFiles = readdirSync(tmpDir).filter(f => f.endsWith(".html"));
-    expect(mdFiles.length).toBeGreaterThan(0);
-    expect(htmlFiles.length).toBeGreaterThan(0);
-
-    const outfile = path.join(tmpDir, mdFiles[0]);
-    const htmlOutfile = path.join(tmpDir, htmlFiles[0]);
-    const content = readFileSync(outfile, "utf8");
-    const normalized = content.replace(/\r\n/g, "\n");
-
-    expect(content.length).toBeGreaterThan(500); // ensure non-trivial output
-    expect(normalized.split("\n").length).toBeGreaterThan(20);
-    expect(normalized).toContain("Conversation:");
-    expect(normalized).toContain(`Source: ${CLAUDE_URL}`);
-    expect(normalized).not.toMatch(/[\u2028\u2029\0]/);
-    expect(normalized).not.toMatch(/\r(?!\n)/);
-    const fenceCount = (normalized.match(/```/g) || []).length;
-    expect(fenceCount % 2).toBe(0);
-
-    const html = readFileSync(htmlOutfile, "utf8");
-    expect(html.startsWith("<!doctype html>")).toBe(true);
-    expect(html).toContain("<article class=\"article\">");
-    expect(html).toContain("Source:");
-    expect(html).not.toMatch(/<script/i);
     expect(html).toContain("<style>");
   }, TEST_TIMEOUT_MS);
 });

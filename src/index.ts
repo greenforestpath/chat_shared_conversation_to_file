@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { chromium, type Browser, type BrowserContext, type Page } from 'playwright-chromium'
+import { chromium, type Browser, type Page } from 'playwright-chromium'
 import TurndownService, { type Rule } from 'turndown'
 import fs from 'fs'
 import path from 'path'
@@ -10,29 +10,16 @@ import hljs from 'highlight.js'
 import { spawnSync } from 'child_process'
 import os from 'os'
 import readline from 'readline'
-import { randomUUID } from 'crypto'
 import pkg from '../package.json' assert { type: 'json' }
 
-type Provider = 'chatgpt' | 'claude' | 'gemini' | 'grok'
+type Provider = 'chatgpt' | 'gemini' | 'grok'
 const PROVIDER_PATTERNS: { id: Provider; patterns: RegExp[] }[] = [
-  { id: 'claude', patterns: [/claude\.ai$/i] },
   { id: 'gemini', patterns: [/gemini\.google\.com$/i] },
   { id: 'grok', patterns: [/grok\.com$/i, /grok\.x\.ai$/i] },
   { id: 'chatgpt', patterns: [/chatgpt\.com$/i, /openai\.com$/i, /share\.chatgpt\.com$/i] }
 ]
 const PROVIDER_SELECTOR_CANDIDATES: Record<Provider, string[][]> = {
-  chatgpt: [
-    ['article [data-message-author-role]'],
-    ['[data-message-author-role]'],
-    ['main article'],
-    ['article']
-  ],
-  claude: [
-    ['main [data-testid="message"]', 'main [data-testid="message-row"]', '[data-testid="chat-message"]'],
-    ['article [data-message-author-role]'],
-    ['[data-message-author-role]'],
-    ['main article']
-  ],
+  chatgpt: [['article [data-message-author-role]'], ['[data-message-author-role]'], ['main article'], ['article']],
   gemini: [
     ['share-turn-viewer user-query', 'share-turn-viewer response-container'],
     ['share-viewer user-query', 'share-viewer response-container'],
@@ -67,44 +54,6 @@ type ScrapedMessage = {
   html: string
 }
 
-type ClaudeSnapshotMessage = {
-  sender: 'human' | 'assistant' | string
-  content: {
-    type: 'text'
-    text: string
-  }[]
-}
-
-type ClaudeSnapshot = {
-  snapshot_name?: string
-  chat_messages?: ClaudeSnapshotMessage[]
-}
-
-async function renderFromClaudeSnapshot(
-  snapshot: ClaudeSnapshot,
-  td: TurndownService
-): Promise<{ title: string; markdown: string; retrievedAt: string } | null> {
-  const messages = snapshot.chat_messages ?? []
-  if (!messages.length) return null
-  const title = snapshot.snapshot_name?.trim() || 'Claude Snapshot'
-  const retrievedAt = new Date().toISOString()
-  const lines: string[] = []
-  lines.push(`# Claude Conversation: ${title}`)
-  lines.push('')
-  lines.push(`Retrieved: ${retrievedAt}`)
-  lines.push('')
-  for (const msg of messages) {
-    const role = msg.sender === 'assistant' ? 'Assistant' : 'User'
-    const text = (msg.content ?? []).map(part => part.text ?? '').join('\n').trim()
-    if (!text) continue
-    lines.push(`## ${role}`)
-    lines.push('')
-    lines.push(td.turndown(text))
-    lines.push('')
-  }
-  return { title, markdown: normalizeLineTerminators(lines.join('\n')), retrievedAt }
-}
-
 type CliOptions = {
   timeoutMs: number
   outfile?: string
@@ -129,10 +78,6 @@ type CliOptions = {
   forgetGh: boolean
   dryRun: boolean
   yes: boolean
-  claudeCookieFile?: string
-  claudeCookiePrompt: boolean
-  claudeBrowserAssist: boolean
-  claudeAttachWs?: string
   ghPagesRepo?: string
   ghPagesBranch: string
   ghPagesDir: string
@@ -648,26 +593,13 @@ const escapeHtml = (value: string): string =>
     .replace(/\//g, '&#47;')
     .replace(/\r?\n/g, '<br>')
 
-const stripProviderPrefix = (title: string): string =>
-  title.replace(/^(ChatGPT|Claude|Gemini|Grok)\s*-?\s*/i, '')
+const stripProviderPrefix = (title: string): string => title.replace(/^(ChatGPT|Gemini|Grok)\s*-?\s*/i, '')
 
 export function renderHtmlDocument(markdown: string, title: string, source: string, retrieved: string): string {
   const counts = new Map<string, number>()
   const headings: { level: number; text: string; id: string }[] = []
 
   const md = new MarkdownIt({ html: true, linkify: true, breaks: true })
-  md.set({
-    highlight(code: string, lang: string): string {
-      if (lang && hljs.getLanguage(lang)) {
-        const { value } = hljs.highlight(code, { language: lang, ignoreIllegals: true })
-        return `<div class="code-block"><div class="code-header"><div class="code-dots"><span></span><span></span><span></span></div><span class="code-lang">${lang}</span></div><pre><code class="hljs language-${lang}">${value}</code></pre></div>`
-      }
-      const auto = hljs.highlightAuto(code)
-      const detected = auto.language || 'text'
-      const value = auto.value || md.utils.escapeHtml(code)
-      return `<div class="code-block"><div class="code-header"><div class="code-dots"><span></span><span></span><span></span></div><span class="code-lang">${detected}</span></div><pre><code class="hljs language-${detected}">${value}</code></pre></div>`
-    }
-  })
   md.set({
     highlight(code: string, lang: string): string {
       if (lang && hljs.getLanguage(lang)) {
@@ -697,7 +629,10 @@ export function renderHtmlDocument(markdown: string, title: string, source: stri
     return self.renderToken(tokens, idx, opts)
   }
 
-  const body = md.render(markdown)
+  // Strip any stray script tags to avoid runtime fetches/404s in exported HTML.
+  const safeMarkdown = markdown.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+  const rendered = md.render(safeMarkdown)
+  const body = rendered.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
   const safeTitle = escapeHtml(stripProviderPrefix(title))
   const safeSource = escapeHtml(source)
   const safeRetrieved = escapeHtml(retrieved)
@@ -724,7 +659,7 @@ export function renderHtmlDocument(markdown: string, title: string, source: stri
   <title>${safeTitle}</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400..700&family=JetBrains+Mono:wght@400..500&display=swap" rel="stylesheet" />
   <style>${INLINE_STYLE}</style>
 </head>
 <body>
@@ -810,10 +745,6 @@ function parseArgs(args: string[]): ParsedArgs {
   let forgetGh = false
   let dryRun = false
   let yes = false
-  let claudeCookieFile: string | undefined
-  let claudeCookiePrompt = false
-  let claudeBrowserAssist = false
-  let claudeAttachWs: string | undefined
   let ghPagesRepo: string | undefined
   let ghPagesBranch = 'gh-pages'
   let ghPagesDir = 'csctf'
@@ -868,20 +799,6 @@ function parseArgs(args: string[]): ParsedArgs {
         } else {
           throw new AppError('--title requires a value')
         }
-        break
-      case '--claude-cookie-file':
-        claudeCookieFile = args[i + 1]
-        i += 1
-        break
-      case '--claude-cookie-prompt':
-        claudeCookiePrompt = true
-        break
-      case '--claude-browser-assist':
-        claudeBrowserAssist = true
-        break
-      case '--claude-attach-ws':
-        claudeAttachWs = args[i + 1]
-        i += 1
         break
       case '--wait-for-selector':
         if (i + 1 < args.length && !args[i + 1].startsWith('-')) {
@@ -993,10 +910,6 @@ function parseArgs(args: string[]): ParsedArgs {
     forgetGh,
     dryRun,
     yes,
-    claudeCookieFile,
-    claudeCookiePrompt,
-    claudeBrowserAssist,
-    claudeAttachWs,
     ghPagesRepo,
     ghPagesBranch,
     ghPagesDir,
@@ -1053,18 +966,16 @@ const DONE = (quiet: boolean) => (msg: string, elapsedMs?: number) => {
 function usage(): void {
   console.log(
     [
-      `Usage: csctf <chatgpt|claude|gemini|grok-share-url>`,
+      `Usage: csctf <chatgpt|gemini|grok-share-url>`,
       `  [--timeout-ms 60000] [--outfile path|--output-dir dir] [--quiet] [--verbose] [--format both|md|html]`,
       `  [--headful|--headless]`,
       `  [--open] [--copy] [--json] [--title "Custom Title"] [--wait-for-selector "<css>"] [--debug]`,
-      `  [--claude-browser-assist] [--claude-attach-ws wsUrl] [--claude-cookie-file path] [--claude-cookie-prompt]`,
       `  [--check-updates|--no-check-updates] [--version] [--no-html] [--html-only] [--md-only]`,
       `  [--gh-pages-repo owner/name] [--gh-pages-branch gh-pages] [--gh-pages-dir dir]`,
       `  [--remember] [--forget-gh-pages] [--dry-run] [--yes] [--help] [--gh-install]`,
       '',
       'Common recipes:',
       `  Basic scrape (ChatGPT):   csctf https://chatgpt.com/share/<id>`,
-      `  Basic scrape (Claude):    csctf https://claude.ai/share/<id>`,
       `  Basic scrape (Gemini):    csctf https://gemini.google.com/share/<id>`,
       `  Basic scrape (Grok):      csctf https://grok.com/share/<id>`,
       `  HTML only:                csctf <url> --html-only`,
@@ -1110,7 +1021,7 @@ export function uniquePath(basePath: string): string {
 function buildTurndown(): TurndownService {
   const td = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced', bulletListMarker: '-' })
 
-  // Preserve paragraph structure for blocky containers that ChatGPT/Claude/Gemini use.
+  // Preserve paragraph structure for blocky containers that ChatGPT/Gemini use.
   // Some share layouts wrap text in <div>/<section>/<article> without <p>; ensure we emit blank lines.
   td.addRule('blockContainers', {
     filter: ['div', 'section', 'article', 'main', 'header', 'footer'],
@@ -1403,7 +1314,7 @@ function renderIndex(manifest: PublishHistoryItem[], title = 'csctf exports'): s
   <title>${escapeHtml(title)}</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400..800&display=swap" rel="stylesheet" />
   <style>
     :root {
       --color-bg: #fafbfc;
@@ -1888,106 +1799,11 @@ async function scrape(
     waitForSelector?: string
     debug?: boolean
     headless: boolean
-    claudeCookieFile?: string
-    claudeCookiePrompt?: boolean
-    claudeBrowserAssist?: boolean
-    claudeAttachWs?: string
   }
 ): Promise<{ title: string; markdown: string; retrievedAt: string }> {
   const td = buildTurndown()
   let browser: Browser | null = null
-  let cdpBrowser: Browser | null = null
-  let context: BrowserContext | null = null
   let page!: Page
-  const resolveClaudeCookie = async (): Promise<string | undefined> => {
-    const envCookie = process.env.CSCTF_CLAUDE_COOKIE?.trim()
-    if (envCookie) return envCookie
-    if (opts.claudeCookieFile) {
-      try {
-        const fileCookie = fs.readFileSync(opts.claudeCookieFile, 'utf8').trim()
-        if (fileCookie) return fileCookie
-      } catch {
-        /* ignore */
-      }
-    }
-    if (opts.claudeCookiePrompt) {
-      if (!process.stdin.isTTY) return undefined
-      return await new Promise(resolve => {
-        const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
-        rl.question('Claude cookie (e.g., cf_clearance=...; __cf_bm=...): ', answer => {
-          rl.close()
-          resolve(answer.trim() || undefined)
-        })
-      })
-    }
-    return undefined
-  }
-  const claudeCookie = provider === 'claude' ? await resolveClaudeCookie() : undefined
-  const maybeFetchClaudeSnapshotViaCDP = async (page: Page, shareUrl: string): Promise<ClaudeSnapshot | null> => {
-    try {
-      const id = shareUrl.replace(/^https?:\/\/claude\.ai\/share\//i, '')
-      const res = await page.evaluate(
-        async snapId => {
-          const resp = await fetch(
-            `https://claude.ai/api/chat_snapshots/${snapId}?rendering_mode=messages&render_all_tools=true`,
-            { credentials: 'include' }
-          )
-          const text = await resp.text()
-          return { ok: resp.ok, status: resp.status, text }
-        },
-        id
-      )
-      if (!res.ok) return null
-      return JSON.parse(res.text) as ClaudeSnapshot
-    } catch {
-      return null
-    }
-  }
-
-  const fetchClaudeSnapshotViaNode = (endpoint: string, shareUrl: string): ClaudeSnapshot | null => {
-    try {
-      const script = `
-        const { chromium } = require('playwright-chromium');
-        (async() => {
-          const ws = process.env.CSCTF_CLAUDE_WS_URL || '${endpoint}';
-          const url = '${shareUrl}';
-          const id = url.replace(/^https?:\\/\\/claude\\.ai\\/share\\//i, '');
-          const browser = await chromium.connectOverCDP(ws, { timeout: 30000 });
-          const context = browser.contexts()[0] || (await browser.newContext());
-          const page = context.pages()[0] || (await context.newPage());
-          const resp = await page.evaluate(async snapId => {
-            const r = await fetch(
-              'https://claude.ai/api/chat_snapshots/' + snapId + '?rendering_mode=messages&render_all_tools=true',
-              { credentials: 'include' }
-            );
-            const text = await r.text();
-            return { ok: r.ok, status: r.status, text };
-          }, id);
-          await browser.close();
-          if (!resp.ok) {
-            console.error(JSON.stringify({ ok: false, status: resp.status }));
-            process.exit(2);
-          }
-          console.log(resp.text);
-        })().catch(err => { console.error(err); process.exit(1); });
-      `
-      const tmp = path.join(os.tmpdir(), `csctf-cdp-${randomUUID()}.js`)
-      fs.writeFileSync(tmp, script, 'utf8')
-      const res = spawnSync('node', [tmp], {
-        env: { ...process.env, CSCTF_CLAUDE_WS_URL: endpoint },
-        encoding: 'utf8',
-        timeout: Math.max(30000, timeoutMs)
-      })
-      fs.unlinkSync(tmp)
-      if (res.status === 0 && res.stdout) {
-        return JSON.parse(res.stdout.trim()) as ClaudeSnapshot
-      }
-      return null
-    } catch {
-      return null
-    }
-  }
-
   const resolveChromiumExecutable = (): string | undefined => {
     const candidates =
       process.platform === 'darwin'
@@ -2024,87 +1840,37 @@ async function scrape(
   }
 
   try {
-    const executablePath = resolveChromiumExecutable()
-    if (provider === 'claude' && opts.claudeBrowserAssist) {
-      // Attach to an existing remote-debug Chrome if provided; otherwise launch a temp profile headful Chrome with RD port.
-      const existingWs = opts.claudeAttachWs ?? process.env.CSCTF_CLAUDE_WS_URL
-      if (existingWs) {
-        const endpoint = existingWs
-        const nodeSnapshot = fetchClaudeSnapshotViaNode(endpoint, url)
-        if (nodeSnapshot) {
-          const rendered = await renderFromClaudeSnapshot(nodeSnapshot, td)
-          if (rendered) return rendered
-        }
-        cdpBrowser = await chromium.connectOverCDP(endpoint, { timeout: Math.max(30000, timeoutMs) })
-        context = cdpBrowser.contexts()[0] ?? (await cdpBrowser.newContext())
-        const pages = context.pages()
-        page = pages[0] ?? (await context.newPage())
-      } else {
-        const executablePath = resolveChromiumExecutable()
-        const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'csctf-chrome-'))
-        context = await chromium.launchPersistentContext(userDataDir, {
-          headless: false,
-          executablePath,
-          viewport: { width: 1366, height: 768 },
-          locale: 'en-US'
-        })
-        page = context.pages()[0] ?? (await context.newPage())
-      }
-      const claudeSnapshot = await maybeFetchClaudeSnapshotViaCDP(page, url)
-      if (claudeSnapshot) {
-        const rendered = await renderFromClaudeSnapshot(claudeSnapshot, td)
-        if (rendered) return rendered
-      }
-      if (claudeCookie) {
-        await page.setExtraHTTPHeaders({ cookie: claudeCookie })
-      }
-    } else if (provider === 'claude') {
-      // Use a persistent, headful, real Chrome profile to mimic a normal user as closely as possible.
-      const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'csctf-chrome-'))
-      context = await chromium.launchPersistentContext(userDataDir, {
-        headless: false,
-        executablePath,
-        viewport: { width: 1366, height: 768 },
-        locale: 'en-US',
-        userAgent: undefined
-      })
-      page = context.pages()[0] ?? (await context.newPage())
-      if (claudeCookie) {
-        await page.setExtraHTTPHeaders({ cookie: claudeCookie })
-      }
-    } else {
-      browser = await chromium.launch({
-        headless: opts.headless,
-        executablePath: resolveChromiumExecutable(),
-        args: [
-          '--disable-blink-features=AutomationControlled',
-          '--disable-features=IsolateOrigins,site-per-process',
-          '--disable-site-isolation-trials'
-        ]
-      })
-      page = await browser.newPage({
-        userAgent:
-          'Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        viewport: { width: 1366, height: 768 }
-      })
-      const realHeaders: Record<string, string> = {
-        'sec-ch-ua': '"Not.A/Brand";v="24", "Chromium";v="122", "Google Chrome";v="122"',
-        'sec-ch-ua-platform': '"macOS"',
-        'sec-ch-ua-mobile': '?0',
-        'upgrade-insecure-requests': '1',
-        'accept-language': 'en-US,en;q=0.9',
-        accept:
-          'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7'
-      }
-      await page.setExtraHTTPHeaders(realHeaders)
-      await page.route('**/*', route => {
-        const headers = {
-          ...route.request().headers(),
-          ...realHeaders
-        }
-        route.continue({ headers })
-      })
+    browser = await chromium.launch({
+      headless: opts.headless,
+      executablePath: resolveChromiumExecutable(),
+      args: [
+        '--disable-blink-features=AutomationControlled',
+        '--disable-features=IsolateOrigins,site-per-process',
+        '--disable-site-isolation-trials'
+      ]
+    })
+    page = await browser.newPage({
+      userAgent:
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      viewport: { width: 1366, height: 768 }
+    })
+    const realHeaders: Record<string, string> = {
+      'sec-ch-ua': '"Not.A/Brand";v="24", "Chromium";v="122", "Google Chrome";v="122"',
+      'sec-ch-ua-platform': '"macOS"',
+      'sec-ch-ua-mobile': '?0',
+      'upgrade-insecure-requests': '1',
+      'accept-language': 'en-US,en;q=0.9',
+      accept:
+        'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7'
     }
+    await page.setExtraHTTPHeaders(realHeaders)
+    await page.route('**/*', route => {
+      const headers = {
+        ...route.request().headers(),
+        ...realHeaders
+      }
+      route.continue({ headers })
+    })
     await page.addInitScript(() => {
       // Basic stealth to reduce bot-detection/CF challenges.
       Object.defineProperty(navigator, 'webdriver', { get: () => undefined })
@@ -2202,6 +1968,7 @@ async function scrape(
           'button, [data-testid*="citation"], [data-testid*="pill"], [class*="copy"], [role="tooltip"], [aria-label="Copy"], [data-testid*="copy"], [data-testid*="meta"]'
         )
         garbage.forEach(g => g.remove())
+        clone.querySelectorAll('script').forEach(s => s.remove())
         clone.querySelectorAll('[data-start],[data-end]').forEach(n => {
           n.removeAttribute('data-start')
           n.removeAttribute('data-end')
@@ -2259,7 +2026,7 @@ async function scrape(
           const className = (el.getAttribute('class') ?? '').toLowerCase()
           const inferRole = (): string => {
             const source = `${attrRole} ${testId} ${className}`
-            if (/assistant|bot|claude|system|model|gemini|grok/.test(source)) return 'assistant'
+            if (/assistant|bot|system|model|gemini|grok/.test(source)) return 'assistant'
             if (/user|human|you/.test(source)) return 'user'
             return 'unknown'
           }
@@ -2280,7 +2047,7 @@ async function scrape(
         .filter((m): m is { role: MessageRole; html: string } => Boolean(m))
     }, selectorGroups)) as ScrapedMessage[]
 
-    if (provider === 'grok' || provider === 'gemini' || provider === 'claude') {
+    if (provider === 'grok' || provider === 'gemini') {
       let unknownIdx = 0
       messages = messages.map(m => {
         if (m.role !== 'unknown') return m
@@ -2300,9 +2067,8 @@ async function scrape(
     }
 
     const lines: string[] = []
-    const titleWithoutPrefix = title.replace(/^(ChatGPT|Claude|Gemini|Grok)\s*-?\s*/i, '')
-    const headingPrefix =
-      provider === 'claude' ? 'Claude' : provider === 'gemini' ? 'Gemini' : provider === 'grok' ? 'Grok' : 'ChatGPT'
+    const titleWithoutPrefix = title.replace(/^(ChatGPT|Gemini|Grok)\s*-?\s*/i, '')
+    const headingPrefix = provider === 'gemini' ? 'Gemini' : provider === 'grok' ? 'Grok' : 'ChatGPT'
     lines.push(`# ${headingPrefix} Conversation: ${titleWithoutPrefix}`)
     lines.push('')
     const retrievedAt = new Date().toISOString()
@@ -2343,11 +2109,7 @@ async function scrape(
     }
     throw err
   } finally {
-    if (cdpBrowser) {
-      await cdpBrowser.close()
-    } else if (context) {
-      await context.close()
-    } else if (browser) {
+    if (browser) {
       await browser.close()
     }
   }
@@ -2388,10 +2150,6 @@ async function main(): Promise<void> {
     forgetGh,
     dryRun,
     yes,
-    claudeCookieFile,
-    claudeCookiePrompt,
-    claudeBrowserAssist,
-    claudeAttachWs,
     autoInstallGh,
     ghPagesRepo,
     ghPagesBranch,
@@ -2412,20 +2170,20 @@ async function main(): Promise<void> {
     process.exit(url ? 0 : 1)
   }
   if (!/^https?:\/\//i.test(url)) {
-    fail('Please pass a valid http(s) URL (public ChatGPT or Claude share link).')
+    fail('Please pass a valid http(s) URL (public ChatGPT, Gemini, or Grok share link).')
     usage()
     process.exit(1)
   }
   const sharePattern =
-    /^https?:\/\/(chatgpt\.com|share\.chatgpt\.com|chat\.openai\.com|claude\.ai|gemini\.google\.com|grok\.com)\/share\//i
+    /^https?:\/\/(chatgpt\.com|share\.chatgpt\.com|chat\.openai\.com|gemini\.google\.com|grok\.com)\/share\//i
   if (!sharePattern.test(url)) {
     fail(
-      'The URL should be a public ChatGPT, Claude, Gemini, or Grok share link (e.g., https://chatgpt.com/share/<id>, https://claude.ai/share/<id>, https://gemini.google.com/share/<id>, or https://grok.com/share/<id>).'
+      'The URL should be a public ChatGPT, Gemini, or Grok share link (e.g., https://chatgpt.com/share/<id>, https://gemini.google.com/share/<id>, or https://grok.com/share/<id>).'
     )
     process.exit(1)
   }
   const provider = detectProvider(url)
-  const effectiveHeadless = provider === 'claude' ? false : headless !== false
+  const effectiveHeadless = headless !== false
 
   if (forgetGh) {
     forgetGhConfig()
@@ -2469,11 +2227,7 @@ async function main(): Promise<void> {
     const { title, markdown, retrievedAt } = await scrape(url, timeoutMs, provider, {
       waitForSelector,
       debug,
-      headless: effectiveHeadless,
-      claudeCookieFile,
-      claudeCookiePrompt,
-      claudeBrowserAssist,
-      claudeAttachWs
+      headless: effectiveHeadless
     })
     endLaunch()
     endOpen()
@@ -2481,7 +2235,7 @@ async function main(): Promise<void> {
     const endConvert = step(idx++, totalSteps, 'Converting to Markdown')
     const datePrefix = new Date().toISOString().slice(0, 10)
     const baseTitle = titleOverride || title
-    const name = `${datePrefix}-${provider}-${slugify(baseTitle.replace(/^(ChatGPT|Claude|Gemini|Grok)\s*-?\s*/i, ''))}`
+    const name = `${datePrefix}-${provider}-${slugify(baseTitle.replace(/^(ChatGPT|Gemini|Grok)\s*-?\s*/i, ''))}`
     const resolvedOutfile = outputDir
       ? path.resolve(outputDir)
       : outfile
