@@ -95,14 +95,17 @@ async function scrape(url: string): Promise<{ title: string; markdown: string }>
     await page.waitForSelector('article [data-message-author-role]', { timeout: 60_000 })
 
     const title = await page.title()
-    const messages = await page.$$eval<HTMLElement, ScrapedMessage[]>(
+    const messages = (await page.$$eval(
       'article [data-message-author-role]',
-      nodes =>
-        nodes.map(node => ({
-          role: node.getAttribute('data-message-author-role') ?? 'unknown',
-          html: node.innerHTML
-        }))
-    )
+      (nodes: Element[]) =>
+        nodes.map(node => {
+          const element = node as HTMLElement
+          return {
+            role: element.getAttribute('data-message-author-role') ?? 'unknown',
+            html: element.innerHTML
+          }
+        })
+    )) as ScrapedMessage[]
 
     if (!messages.length) throw new Error('No messages were found in the shared conversation.')
 
