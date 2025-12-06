@@ -67,6 +67,7 @@ const CONFIG_PATH = path.join(CONFIG_DIR, 'config.json')
 const UPDATE_CACHE_PATH = path.join(CONFIG_DIR, 'last-update.json')
 const CLIP_HELP =
   'Clipboard copy not available (requires pbcopy | wl-copy | xclip | clip.exe). You can copy the saved file manually.'
+const VIEWER_CMD = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open'
 
 type GhConfig = {
   repo: string
@@ -912,6 +913,31 @@ function writeAtomic(target: string, content: string): void {
   }
 }
 
+function copyToClipboard(content: string, quiet: boolean): boolean {
+  const tryCmd = (cmd: string, args: string[]) => {
+    try {
+      const res = spawnSync(cmd, args, { input: content, stdio: ['pipe', 'ignore', quiet ? 'ignore' : 'inherit'] })
+      return res.status === 0
+    } catch {
+      return false
+    }
+  }
+  if (process.platform === 'darwin') return tryCmd('pbcopy', [])
+  if (process.platform === 'win32') return tryCmd('clip', [])
+  return tryCmd('wl-copy', []) || tryCmd('xclip', ['-selection', 'clipboard'])
+}
+
+function openFile(filePath: string, quiet: boolean): boolean {
+  const cmd = process.platform === 'win32' ? 'cmd' : VIEWER_CMD
+  const args = process.platform === 'win32' ? ['/c', 'start', '', filePath] : [filePath]
+  try {
+    const res = spawnSync(cmd, args, { stdio: quiet ? 'ignore' : 'inherit' })
+    return res.status === 0
+  } catch {
+    return false
+  }
+}
+
 function isGhCliAvailable(): boolean {
   const res = spawnSync('gh', ['--version'], { stdio: 'ignore' })
   return res.status === 0
@@ -1369,6 +1395,11 @@ async function main(): Promise<void> {
     outfile,
     quiet,
     verbose,
+    format,
+    openAfter,
+    copy,
+    json,
+    titleOverride,
     checkUpdates,
     versionOnly,
     generateHtml,
@@ -1416,8 +1447,9 @@ async function main(): Promise<void> {
     forgetGhConfig()
   }
   const config = forgetGh ? {} : loadConfig()
-  const produceMd = !htmlOnly
-  const produceHtml = !mdOnly && generateHtml
+  // Resolve desired formats
+  let produceMd = format !== 'html' && !htmlOnly
+  let produceHtml = format !== 'md' && generateHtml && !mdOnly
   if (!produceMd && !produceHtml) {
     fail('At least one output format is required (Markdown and/or HTML).')
     process.exit(1)
@@ -1453,7 +1485,7 @@ async function main(): Promise<void> {
     endOpen()
 
     const endConvert = step(idx++, totalSteps, 'Converting to Markdown')
-    const name = slugify(title.replace(/^(ChatGPT|Claude|Gemini|Grok)\s*-?\s*/i, ''))
+    const name = slugify((titleOverride || title).replace(/^(ChatGPT|Claude|Gemini|Grok)\s*-?\s*/i, ''))
     const resolvedOutfile = outfile ? path.resolve(outfile) : path.join(process.cwd(), `${name}.md`)
     const outfileStat = fs.existsSync(resolvedOutfile) ? fs.statSync(resolvedOutfile) : null
     const isDirLike =
@@ -1496,12 +1528,33 @@ async function main(): Promise<void> {
       })
       const mdPath = writtenFiles.find(f => f.kind === 'md')
       const htmlPath = writtenFiles.find(f => f.kind === 'html')
-      const viewerHint =
-        process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open'
       if (mdPath || htmlPath) {
-        console.log(chalk.gray(`   Hint: ${viewerHint} <path> to view the export locally.`))
+        console.log(chalk.gray(`   Hint: ${VIEWER_CMD} <path> to view the export locally.`))
       }
       endLocation()
+    }
+
+    // Post-write UX: copy/open/json
+    if (copy) {
+      const copied = copyToClipboard(markdown, quiet)
+      if (!copied && !quiet) console.log(chalk.yellow(CLIP_HELP))
+    }
+    if (openAfter) {
+      const target = writtenFiles.find(f => f.kind === 'html') ?? writtenFiles.find(f => f.kind === 'md')
+      if (target) {
+        const opened = openFile(target.path, quiet)
+        if (!opened && !quiet) console.log(chalk.yellow(`Could not open ${target.path}; use ${VIEWER_CMD} <path> manually.`))
+      }
+    }
+    if (json) {
+      const payload = {
+        title: titleOverride || title,
+        provider,
+        source: url,
+        retrievedAt,
+        outputs: writtenFiles.map(f => ({ kind: f.kind, path: f.path }))
+      }
+      console.log(JSON.stringify(payload, null, 2))
     }
 
     if (shouldPublish) {
@@ -1543,13 +1596,11 @@ async function main(): Promise<void> {
     done('Finished', Date.now() - overallStart)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    const networkHints =
-      'Check that the share link is public and reachable; try --timeout-ms 90000 if the page is slow.'
-    const formatted =
-      message.includes('No messages were found') || message.toLowerCase().includes('timeout')
-        ? `${message} (${networkHints})`
-        : message
-    fail(formatted)
+    const hint =
+      err instanceof AppError && err.hint
+        ? err.hint
+        : 'Check that the share link is public and reachable; try --timeout-ms 90000 if the page is slow.'
+    fail(`${message}${hint ? ` (${hint})` : ''}`)
     process.exit(1)
   }
 }
