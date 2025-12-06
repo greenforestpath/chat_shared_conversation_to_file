@@ -600,19 +600,25 @@ export function renderHtmlDocument(markdown: string, title: string, source: stri
   const counts = new Map<string, number>()
   const headings: { level: number; text: string; id: string }[] = []
 
-  const md = new MarkdownIt({ html: true, linkify: true, breaks: true })
-  md.set({
-    highlight(code: string, lang: string): string {
-      if (lang && hljs.getLanguage(lang)) {
-        const { value } = hljs.highlight(code, { language: lang, ignoreIllegals: true })
-        return `<div class="code-block"><div class="code-header"><div class="code-dots"><span></span><span></span><span></span></div><span class="code-lang">${lang}</span></div><pre><code class="hljs language-${lang}">${value}</code></pre></div>`
-      }
-      const auto = hljs.highlightAuto(code)
-      const detected = auto.language || 'text'
-      const value = auto.value || md.utils.escapeHtml(code)
-      return `<div class="code-block"><div class="code-header"><div class="code-dots"><span></span><span></span><span></span></div><span class="code-lang">${detected}</span></div><pre><code class="hljs language-${detected}">${value}</code></pre></div>`
+  const md = new MarkdownIt({ html: true, linkify: true, breaks: true, highlight: () => '' })
+
+  md.renderer.rules.fence = (tokens: any[], idx: number) => {
+    const token = tokens[idx]
+    const code = token.content
+    const lang = (token.info || '').trim()
+
+    const render = (language: string | undefined, raw: string) => {
+      const highlighted = language && hljs.getLanguage(language)
+        ? hljs.highlight(raw, { language, ignoreIllegals: true }).value
+        : hljs.highlightAuto(raw).value
+      const label = language && hljs.getLanguage(language)
+        ? language
+        : hljs.highlightAuto(raw).language || 'text'
+      return `<div class="code-block"><div class="code-header"><div class="code-dots"><span></span><span></span><span></span></div><span class="code-lang">${label}</span></div><pre><code class="hljs language-${label}">${highlighted}</code></pre></div>`
     }
-  })
+
+    return render(lang || undefined, code)
+  }
 
   md.renderer.rules.heading_open = (
     tokens: any[],
@@ -1083,12 +1089,37 @@ function buildTurndown(): TurndownService {
       const className = codeNode?.getAttribute('class') ?? ''
       const match = className.match(/language-([\w-]+)/)
       const lang = match?.[1] ?? ''
-      const codeText = (codeNode?.textContent ?? '').replace(/\u00a0/g, ' ').trimEnd()
+      const codeText = (codeNode?.textContent ?? '').replace(/\u00a0/g, ' ').replace(/\r\n?/g, '\n').trimEnd()
       const maxTicks = (codeText.match(/`+/g) || []).reduce((a, b) => Math.max(a, b.length), 0)
       const fence = '`'.repeat(Math.max(3, maxTicks + 1))
       return `\n\n${fence}${lang}\n${codeText}\n${fence}\n\n`
     }
   }
+
+  // Handle <pre> blocks that may not wrap code nodes (seen in Grok/Gemini).
+  td.addRule('preBlocks', {
+    filter: (node: HTMLElement) => node.nodeName === 'PRE' && node.firstElementChild?.nodeName !== 'CODE',
+    replacement: (_content: string, node: HTMLElement) => {
+      const text = (node.textContent ?? '').replace(/\u00a0/g, ' ').replace(/\r\n?/g, '\n').trimEnd()
+      const maxTicks = (text.match(/`+/g) || []).reduce((a, b) => Math.max(a, b.length), 0)
+      const fence = '`'.repeat(Math.max(3, maxTicks + 1))
+      return `\n\n${fence}\n${text}\n${fence}\n\n`
+    }
+  })
+
+  // Convert multiline or long inline code into fenced blocks when it slipped past <pre>.
+  td.addRule('inlineCodeToBlock', {
+    filter: (node: HTMLElement) =>
+      node.nodeName === 'CODE' &&
+      node.parentElement?.nodeName !== 'PRE' &&
+      Boolean((node.textContent ?? '').includes('\n') || (node.textContent ?? '').length > 240),
+    replacement: (_content: string, node: HTMLElement) => {
+      const text = (node.textContent ?? '').replace(/\u00a0/g, ' ').replace(/\r\n?/g, '\n').trimEnd()
+      const maxTicks = (text.match(/`+/g) || []).reduce((a, b) => Math.max(a, b.length), 0)
+      const fence = '`'.repeat(Math.max(3, maxTicks + 1))
+      return `\n\n${fence}\n${text}\n${fence}\n\n`
+    }
+  })
 
   const rulesArray = (td as TurndownService & { rules: { array: Rule[] } }).rules.array
   const existingRuleIndex = rulesArray.findIndex(rule => {
@@ -1964,6 +1995,40 @@ async function scrape(
         ? [[opts.waitForSelector]]
         : PROVIDER_SELECTOR_CANDIDATES[provider] ?? PROVIDER_SELECTOR_CANDIDATES.chatgpt
     let messages = (await page.evaluate((groups: string[][]) => {
+      const normalizeCodeBlocks = (root: HTMLElement) => {
+        // Ensure <pre> nodes wrap their text in <code> and preserve whitespace.
+        root.querySelectorAll('pre').forEach(pre => {
+          const text = (pre.textContent ?? '').replace(/\u00a0/g, ' ').replace(/\r\n?/g, '\n')
+          const existing = pre.querySelector('code')
+          if (existing) {
+            existing.textContent = text
+          } else {
+            const code = root.ownerDocument.createElement('code')
+            code.textContent = text
+            pre.innerHTML = ''
+            pre.appendChild(code)
+          }
+        })
+
+        // Promote blocky <code> to <pre><code> to preserve newlines (common in Grok/Gemini renders).
+        root.querySelectorAll('code').forEach(code => {
+          const text = (code.textContent ?? '').replace(/\u00a0/g, ' ').replace(/\r\n?/g, '\n')
+          const looksBlocky =
+            text.includes('\n') ||
+            text.length > 240 ||
+            (code.parentElement && ['DIV', 'SECTION', 'ARTICLE', 'P'].includes(code.parentElement.nodeName))
+          if (looksBlocky && code.parentElement?.nodeName !== 'PRE') {
+            const pre = root.ownerDocument.createElement('pre')
+            const inner = root.ownerDocument.createElement('code')
+            inner.textContent = text
+            pre.appendChild(inner)
+            code.replaceWith(pre)
+          } else {
+            code.textContent = text
+          }
+        })
+      }
+
       const cleanHtml = (el: Element): string => {
         const clone = el.cloneNode(true) as HTMLElement
         const garbage = clone.querySelectorAll(
@@ -1975,6 +2040,7 @@ async function scrape(
           n.removeAttribute('data-start')
           n.removeAttribute('data-end')
         })
+        normalizeCodeBlocks(clone)
         return clone.innerHTML
       }
 
