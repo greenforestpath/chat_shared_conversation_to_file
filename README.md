@@ -37,7 +37,7 @@ curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/chat_shared_conve
 - Clarity: colorized, step-based logging; confirmation gate for publishing (`PROCEED` unless `--yes`).
 
 ## 🧠 Processing details (algorithms)
-- Selector strategy: waits for `article [data-message-author-role]` to ensure conversation content is present.
+- Selector strategy: provider-specific selectors with fallback chains—ChatGPT uses `article [data-message-author-role]`, Gemini uses custom web components (`share-turn-viewer`, `response-container`), Grok uses flexible `data-testid` patterns. Each has multiple fallbacks tried with short timeouts.
 - Turndown customization: injects fenced code blocks; detects language via `class="language-*"`, strips citation pills and data-start/end attributes.
 - Normalization: converts newlines to `\n`, removes Unicode LS/PS, collapses excessive blank lines.
 - Slugging: lowercase, non-alphanumerics → `_`, trimmed, max 120 chars, Windows reserved-name suffixing, collision suffix `_2`, `_3`, ….
@@ -45,13 +45,13 @@ curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/chat_shared_conve
 - HTML rendering: Markdown-it + highlight.js, heading slug de-dupe to build a TOC, inline CSS tuned for light/dark/print, zero JS.
 
 ## 🔍 How it works (end-to-end)
-1) Launch headless Playwright Chromium with a stable UA.  
-2) Navigate twice (`domcontentloaded` then `networkidle`) to tame late-loading assets.  
-3) Wait for `article [data-message-author-role]`; fail fast if absent.  
-4) Extract each role’s inner HTML (assistant/user) as-is.  
-5) Clean pills/metadata, run Turndown with fenced-code rule, normalize whitespace and newlines.  
-6) Emit Markdown to a temp file, rename atomically; render HTML twin with inline CSS/TOC/HLJS.  
-7) If requested, publish: resolve repo/branch/dir, clone (or create via gh), copy files, regenerate `manifest.json` and `index.html`, commit+push.  
+1) Launch headless Playwright Chromium with stealth configuration (spoofed navigator properties, realistic headers).
+2) Navigate twice (`domcontentloaded` then `networkidle`) to tame late-loading assets.
+3) Detect provider from URL hostname; wait for provider-specific selectors with retry/fallback.
+4) Extract each role's inner HTML (assistant/user), traversing Shadow DOM for web components.
+5) Clean pills/metadata, run Turndown with fenced-code rule, normalize whitespace and newlines.
+6) Emit Markdown to a temp file, rename atomically; render HTML twin with inline CSS/TOC/HLJS.
+7) If requested, publish: resolve repo/branch/dir, clone (or create via gh), copy files, regenerate `manifest.json` and `index.html`, commit+push.
 8) Log steps with timing, print saved paths and optional viewer hint.
 
 ## 🛡️ Security & privacy (deep dive)
@@ -67,10 +67,11 @@ curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/chat_shared_conve
 - I/O: atomic writes; HTML and MD generated in-memory once.
 
 ## 🧭 Failure modes & remedies
-- “No messages were found”: link is private or layout changed; ensure it’s a public share, retry with `--timeout-ms 90000`, report the URL.  
-- Timeout or blank page: slow network/CDN; raise `--timeout-ms`, verify connectivity, ensure provider is reachable.  
-- Publish fails (auth): ensure `gh auth status` passes; verify `--gh-pages-repo owner/name`.  
-- Publish fails (branch/dir): pass `--gh-pages-branch` / `--gh-pages-dir`; use `--remember` to persist.  
+- "No messages were found": link is private or provider layout changed; ensure it's a public share, retry with `--timeout-ms 90000`.
+- Bot detection / challenge page: the tool uses stealth techniques but extreme bot-blocks may still occur; retry or verify link is accessible in a regular browser.
+- Timeout or blank page: slow network/CDN; raise `--timeout-ms`, verify connectivity, ensure provider is reachable.
+- Publish fails (auth): ensure `gh auth status` passes; verify `--gh-pages-repo owner/name`.
+- Publish fails (branch/dir): pass `--gh-pages-branch` / `--gh-pages-dir`; use `--remember` to persist.
 - Filename collisions: expected; tool appends `_2`, `_3`, … instead of clobbering.
 
 ## 📚 Recipes (more examples)
@@ -84,13 +85,6 @@ curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/chat_shared_conve
   `PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright csctf <url>`
 - Longer/slower shares:  
   `csctf <url> --timeout-ms 90000`
-
-## 🛠️ Internals for contributors
-- CLI entry + flow: `src/index.ts` (arg parsing, scrape, render, publish).  
-- Tests: `bun test` (unit), `CSCTF_E2E=1 bun run test:e2e` (full scrape/build/publish assertions).  
-- Build: `bun run build[:target]` emits single-file binaries in `dist/`.  
-- Lint/typecheck: `bun run lint`, `bun run typecheck`.  
-- Installer: `install.sh` prefers release binaries; falls back to Bun build with git+bun.
 
 ## ⚡ Quickstart
 - macOS/Linux:
@@ -126,11 +120,11 @@ csctf https://chatgpt.com/share/69343092-91ac-800b-996c-7552461b9b70 --timeout-m
 ```
 Swap in Gemini or Grok share URLs—flow is identical.
 
-What you’ll see:
+What you'll see:
 - Headless Chromium launch (first run downloads the Playwright bundle).
+- Provider auto-detection from URL hostname; provider-specific selectors applied automatically.
 - `✔ Saved <file>.md` plus the absolute path; an HTML twin (`.html`) is also written by default. Use `--no-html` to skip.
-- One-flag publish: `--publish-to-gh-pages` uses your logged-in `gh` user and the default repo name `my_shared_conversations` (or remembered settings). Confirm by typing `PROCEED` unless you pass `--yes`. Use `--remember` to persist repo/branch/dir; `--forget-gh-pages` to clear; `--dry-run` to simulate. Auth uses `gh`.
-- Also works with Gemini and Grok share links (public).
+- One-flag publish: `--publish-to-gh-pages` uses your logged-in `gh` user and the default repo name `my_shared_conversations` (or remembered settings). Confirm by typing `PROCEED` unless you pass `--yes`. Use `--remember` to persist repo/branch/dir; `--forget-gh-pages` to clear; `--dry-run` to simulate.
 
 ## 📋 Flags at a glance
 | Flag | Default | Purpose | Notes |
@@ -191,7 +185,7 @@ csctf <share-url> --publish-to-gh-pages --yes
 
 ## 🛠️ Local build & dev
 ```bash
-bun install
+bun install                   # also runs postinstall to patch Playwright
 bun run build                 # dist/csctf for current platform
 
 # Dev helpers
@@ -208,11 +202,7 @@ bun run build:windows-x64     # dist/csctf-windows-x64.exe
 bun run build:all
 ```
 
-## 🔧 Contributing details
-- Stack: Bun + TypeScript (strict), eslint via `bun run lint`.
-- Adding a flag: wire it in `parseArgs`, thread through main, document in the flags table.
-- Tests: prefer unit coverage for helpers (`slugify`, `uniquePath`, HTML render); use `e2e/e2e.test.ts` for scrape-sensitive behavior.
-- Releases: tag `v*` → CI builds artifacts + `sha256.txt`; installer fetches latest unless pinned via `VERSION`.
+The `postinstall` script patches Playwright's dynamic path resolution for compatibility with Bun's standalone executable compilation.
 
 ## 🧪 Testing
 - Unit: `bun test` (includes slugify/html render/unique-path checks).
@@ -234,9 +224,10 @@ bun run build:all
 - Properties: fenced code with languages preserved, TOC present, inline CSS for light/dark/print, no scripts, normalized newlines.
 
 ## ⚙️ CI & releases
-- Workflow: lint → typecheck → unit tests → e2e scrape (Ubuntu) → matrix builds (macOS/Linux/Windows) → upload artifacts.
+- Workflow: lint → typecheck → unit tests → matrix builds (macOS/Linux/Windows) → verify binaries → upload artifacts.
 - Tagged pushes (`v*`) create a GitHub release with binaries and `sha256.txt` (installer can `--verify`).
-- Playwright browsers are cached between e2e runs; README links are checked (chatgpt share link excluded).
+- Build process includes automatic patching of Playwright for standalone executable compatibility.
+- Playwright browsers are cached between runs.
 
 ## 🔁 Operational notes
 - Playwright cache: `~/.cache/ms-playwright` (Linux/macOS) or `%USERPROFILE%\AppData\Local\ms-playwright` (Windows).
@@ -254,8 +245,8 @@ bun run build:all
 | Symptom | Fix |
 | --- | --- |
 | Playwright download slow | Set `PLAYWRIGHT_BROWSERS_PATH` to a pre-cached bundle; rerun after first download. |
-| 403/redirect/login page | Ensure the link is a public ChatGPT share; retry with `--timeout-ms 90000`. |
-| “No messages found” | Share layout may have changed; selectors target `article [data-message-author-role]`. Please report the URL. |
+| 403/redirect/login page | Ensure the link is a public share (ChatGPT, Gemini, or Grok); retry with `--timeout-ms 90000`. |
+| "No messages found" | Share layout may have changed or link is private; provider-specific selectors are tried with fallbacks. |
 | Binary not on PATH | Add `~/.local/bin` (or `DEST`) to PATH; re-open shell. |
 | Download stalls | Retry with cache; verify network; increase `--timeout-ms`. |
 | Filename conflicts/invalid names | Filenames are slugified/truncated; auto-suffix `_2`, `_3`, … to avoid clobbering. |
@@ -264,8 +255,9 @@ bun run build:all
 | Repo not found (publish) | Provide `--gh-pages-repo owner/name`; ensure `gh` is logged in if relying on defaults. |
 
 ## ⚠️ Limitations & known behaviors
-- Headless-only; no headful mode today.
-- Assumes public ChatGPT share layout; selectors are `article [data-message-author-role]`.
+- Headless-only; no headful mode.
+- Requires public share links; private/authenticated shares are not supported.
+- Provider layouts may change; selectors are maintained for ChatGPT, Gemini, and Grok with fallback chains.
 - Markdown/HTML exports require the share to remain available at scrape time.
 - Update checks and GH publishing are opt-in; otherwise no outbound calls beyond fetching the share page.
 
@@ -278,7 +270,7 @@ bun run build:all
 - **Can I override the output path?** Yes: `--outfile /path/to/output.md` bypasses slug-based naming.
 - **Can I reduce console output?** `--quiet` minimizes progress logs; errors still print.
 - **Can I verify downloads?** The installer fetches adjacent `.sha256` files when present; use `--verify` to require a checksum.
-- **Can I change the user agent or selectors?** Edit `src/index.ts` (`chromium.launch` options and `page.waitForSelector` target) and rebuild.
+- **Can I add support for a new provider?** Add hostname patterns to `PROVIDER_PATTERNS`, selector candidates to `PROVIDER_SELECTOR_CANDIDATES`, and rebuild.
 - **How do I verify installs?** Run `csctf --help` and invoke the bundled E2E: `CSCTF_E2E=1 bun run test:e2e` (network + browser download required).
 - **Which Markdown rules are customized?** A turndown rule injects fenced code blocks with detected language from `class="language-..."`; citation pills and data-start/end attributes are stripped.
 
