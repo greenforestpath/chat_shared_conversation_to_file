@@ -33,6 +33,10 @@ const PROVIDER_SELECTOR_CANDIDATES: Record<Provider, string[][]> = {
     ['main article']
   ],
   gemini: [
+    ['share-turn-viewer user-query', 'share-turn-viewer response-container'],
+    ['share-viewer user-query', 'share-viewer response-container'],
+    ['.share-viewer_chat-container user-query', '.share-viewer_chat-container response-container'],
+    ['[data-test-id="chat-app"] user-query', '[data-test-id="chat-app"] response-container'],
     ['main [data-message-author-role]', 'main [data-author-role]', 'main [data-utterance]'],
     ['main [data-testid*="message"]', '[data-testid*="message"]'],
     ['article [data-message-author-role]'],
@@ -42,7 +46,9 @@ const PROVIDER_SELECTOR_CANDIDATES: Record<Provider, string[][]> = {
     ['main [data-testid*="message"]', '[data-testid*="message"]'],
     ['main [data-message-author-role]', 'main [data-author]'],
     ['article [data-message-author-role]'],
-    ['article', 'section', '[role="article"]']
+    ['article', 'section', '[role="article"]', 'main article'],
+    ['.message-bubble', '.response-content-markdown', '.markdown'],
+    ['div[class*="message"]', 'div[class*="chat"]']
   ]
 }
 class AppError extends Error {
@@ -144,7 +150,7 @@ function ensureGhAvailable(autoInstall: boolean): void {
     } else if (spawnSync('yum', ['--version']).status === 0) {
       tryInstall(['sudo', 'yum', 'install', '-y', 'gh'], 'yum install gh')
     } else {
-      throw new Error('Unsupported Linux package manager for auto gh install. Install gh manually.')
+      throw new Error('Unsupported Linux package manager for auto gh install. Please install GitHub CLI manually: https://cli.github.com')
     }
   } else if (platform === 'win32') {
     if (spawnSync('winget', ['--version']).status === 0) {
@@ -227,13 +233,17 @@ async function resolveGitHubToken(): Promise<string> {
   }
   const trimmed = token.trim()
   if (!trimmed) throw new Error('Empty token provided.')
-  // basic sanity for PAT formats (does not guarantee validity)
   const looksLikePat = /^gh[pous]_[A-Za-z0-9_]{20,}|^github_pat_[A-Za-z0-9_]{20,}/.test(trimmed)
   if (!looksLikePat && !process.env.CSCTM_ALLOW_NONSTANDARD_TOKEN) {
     throw new Error('GITHUB_TOKEN does not look like a GitHub PAT (set CSCTM_ALLOW_NONSTANDARD_TOKEN=1 to override).')
   }
-  // zero original buffer
-  token = 'x'.repeat(token.length)
+  // best-effort zeroization of the mutable buffer
+  if (token.length) {
+    const filler = 'x'
+    let obfuscated = ''
+    for (let i = 0; i < token.length; i += 1) obfuscated += filler
+    token = obfuscated
+  }
   return trimmed
 }
 
@@ -480,7 +490,7 @@ export function renderHtmlDocument(markdown: string, title: string, source: stri
   const counts = new Map<string, number>()
   const headings: { level: number; text: string; id: string }[] = []
 
-  const md = new MarkdownIt({ html: false, linkify: true, breaks: true })
+  const md = new MarkdownIt({ html: true, linkify: true, breaks: true })
   md.set({
     highlight(code: string, lang: string): string {
       if (lang && hljs.getLanguage(lang)) {
@@ -513,7 +523,7 @@ export function renderHtmlDocument(markdown: string, title: string, source: stri
   const safeSource = escapeHtml(source)
   const safeRetrieved = escapeHtml(retrieved)
 
-  const tocHeadings = headings.filter(h => h.level >= 2 && h.level <= 3)
+  const tocHeadings = headings.filter(h => h.level >= 2 && h.level <= 4)
   const toc =
     tocHeadings.length > 0
       ? `<div class="toc">
@@ -629,21 +639,6 @@ function parseArgs(args: string[]): ParsedArgs {
       case '--help':
         url = '--help'
         break
-      case '--format':
-        {
-          const val = args[i + 1]
-          i += 1
-          if (val === 'md') {
-            format = 'md'
-          } else if (val === 'html') {
-            format = 'html'
-          } else if (val === 'both') {
-            format = 'both'
-          } else {
-            throw new AppError('--format must be one of both|md|html')
-          }
-        }
-        break
       case '--open':
         openAfter = true
         break
@@ -694,31 +689,6 @@ function parseArgs(args: string[]): ParsedArgs {
       case '--md-only':
         mdOnly = true
         generateHtml = false
-        break
-      case '--format':
-        {
-          const val = args[i + 1]
-          if (!val || val.startsWith('-')) throw new AppError('--format requires a value (both|md|html)')
-          i += 1
-          if (val === 'md') {
-            format = 'md'
-            generateHtml = false
-            htmlOnly = false
-            mdOnly = true
-          } else if (val === 'html') {
-            format = 'html'
-            generateHtml = true
-            htmlOnly = true
-            mdOnly = false
-          } else if (val === 'both') {
-            format = 'both'
-            generateHtml = true
-            htmlOnly = false
-            mdOnly = false
-          } else {
-            throw new AppError('--format must be one of both|md|html')
-          }
-        }
         break
       case '--remember':
         rememberGh = true
@@ -880,9 +850,11 @@ export function slugify(title: string): string {
     .replace(/^_+|_+$/g, '')
     .replace(/\.{2,}/g, '.')
     .replace(/^\./, 'chat_')
+  if (/^\.*$/.test(base)) base = 'chatgpt_conversation'
   if (!base.length) base = 'chatgpt_conversation'
   if (base.length > MAX_SLUG_LEN) base = base.slice(0, MAX_SLUG_LEN).replace(/_+$/, '')
-  if (RESERVED_BASENAMES.has(base)) base = `${base}_chatgpt`
+  const baseRoot = base.split('.')[0] ?? base
+  if (RESERVED_BASENAMES.has(baseRoot)) base = `${base}_chatgpt`
   return base
 }
 
@@ -890,13 +862,15 @@ export function uniquePath(basePath: string): string {
   if (!fs.existsSync(basePath)) return basePath
   const { dir, name, ext } = path.parse(basePath)
   let idx = 2
-  const MAX_ATTEMPTS = 10000
+  const MAX_ATTEMPTS = 1000
   while (idx < MAX_ATTEMPTS) {
     const candidate = path.join(dir, `${name}_${idx}${ext}`)
     if (!fs.existsSync(candidate)) return candidate
     idx += 1
   }
-  throw new Error('Could not find a unique filename after 10000 attempts.')
+  const fallback = path.join(dir, `${name}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}${ext}`)
+  if (!fs.existsSync(fallback)) return fallback
+  throw new Error('Could not find a unique filename after many attempts.')
 }
 
 function buildTurndown(): TurndownService {
@@ -1460,40 +1434,42 @@ async function scrape(
       )
     }
 
-    const selectorSets =
-      provider === 'claude'
-        ? [
-            'main [data-testid="message"]',
-            'main [data-testid="message-row"]',
-            '[data-testid="chat-message"]',
-            'article [data-message-author-role]'
-          ]
-        : provider === 'gemini'
-        ? [
-            'main [data-message-author-role]',
-            'main [data-author-role]',
-            'main [data-utterance]',
-            'main [data-testid*="message"]',
-            'article [data-message-author-role]'
-          ]
-        : provider === 'grok'
-        ? [
-            'main [data-testid*="message"]',
-            'main [data-message-author-role]',
-            'main [data-author]',
-            '[data-testid*="message"]',
-            'article [data-message-author-role]'
-          ]
-        : [
-            'article [data-message-author-role]',
-            'main [data-message-author-role]',
-            '[data-message-author-role]'
-          ]
-    const selector = opts.waitForSelector ?? selectorSets.join(',')
+    const selector = opts.waitForSelector ?? (await (async () => {
+      const candidates = PROVIDER_SELECTOR_CANDIDATES[provider] ?? PROVIDER_SELECTOR_CANDIDATES.chatgpt
+      const perTry = Math.max(2000, timeoutMs / 6)
+      // Try each candidate group with a short "attached" wait; fall back to DOM counting.
+      for (const group of candidates) {
+        const combined = group.join(',')
+        try {
+          await page.waitForSelector(combined, { timeout: perTry, state: 'attached' })
+          if (opts.debug) console.error(chalk.gray(`Selector hit (attached): ${combined}`))
+          return combined
+        } catch {
+          if (opts.debug) console.error(chalk.gray(`Selector miss: ${combined}`))
+        }
+      }
+      // If none attached, check DOM counts directly to pick a selector that already exists but may be hidden.
+      const counts = await page.evaluate((sets: string[][]) => {
+        return sets.map(group => {
+          const selector = group.join(',')
+          const count = document.querySelectorAll(selector).length
+          return { selector, count }
+        })
+      }, candidates)
+      const hit = counts.find(entry => entry.count > 0)
+      if (hit) {
+        if (opts.debug) console.error(chalk.gray(`Selector found via DOM scan: ${hit.selector} (count ${hit.count})`))
+        return hit.selector
+      }
+      throw new AppError(
+        'No conversation content found for this provider.',
+        'Try --wait-for-selector "<css>" to override, or verify the page layout.'
+      )
+    })())
 
     await attemptWithBackoff(
       async () => {
-        await page.waitForSelector(selector, { timeout: timeoutMs / 2 })
+        await page.waitForSelector(selector, { timeout: Math.max(4000, timeoutMs / 2), state: 'attached' })
       },
       timeoutMs,
       'waiting for conversation content (page layout may have changed or the link may be private)'
@@ -1502,53 +1478,83 @@ async function scrape(
     await page.waitForTimeout(Math.min(3000, Math.max(500, timeoutMs / 6)))
 
     const title = await page.title()
-    const messages = (await page.$$eval(
-      selector,
-      (nodes: Element[]) =>
-        nodes
-          .map(node => {
-            const el = node.cloneNode(true) as HTMLElement
-            // Remove UI chrome in DOM: copy buttons, citations, pills, tooltips, meta badges.
-            const garbage = el.querySelectorAll(
-              'button, [data-testid*="citation"], [data-testid*="pill"], [class*="copy"], [role="tooltip"], [aria-label="Copy"], [data-testid*="copy"], [data-testid*="meta"]'
-            )
-            garbage.forEach(g => g.remove())
-            // Strip data-start/end attributes
-            el.querySelectorAll('[data-start],[data-end]').forEach(n => {
-              n.removeAttribute('data-start')
-              n.removeAttribute('data-end')
-            })
-            const attrRole =
-              el.getAttribute('data-message-author-role') ??
-              el.getAttribute('data-author') ??
-              el.getAttribute('data-role') ??
-              ''
-            const testId = (el.getAttribute('data-testid') ?? '').toLowerCase()
-            const className = (el.getAttribute('class') ?? '').toLowerCase()
-            const inferRole = (): string => {
-              const source = `${attrRole} ${testId} ${className}`
-              if (/assistant|bot|claude|system|model|gemini|grok/.test(source)) return 'assistant'
-              if (/user|human|you/.test(source)) return 'user'
-              return 'unknown'
-            }
-            const detected = (attrRole || inferRole()).toLowerCase()
-            const role: MessageRole =
-              detected === 'assistant'
-                ? 'assistant'
-                : detected === 'user'
-                ? 'user'
-                : detected === 'system'
-                ? 'system'
-                : detected === 'tool'
-                ? 'tool'
-                : 'unknown'
-            return {
-              role,
-              html: el.innerHTML
+    const selectorGroups =
+      opts.waitForSelector && opts.waitForSelector.trim().length > 0
+        ? [[opts.waitForSelector]]
+        : PROVIDER_SELECTOR_CANDIDATES[provider] ?? PROVIDER_SELECTOR_CANDIDATES.chatgpt
+    const messages = (await page.evaluate((groups: string[][]) => {
+      const cleanHtml = (el: Element): string => {
+        const clone = el.cloneNode(true) as HTMLElement
+        const garbage = clone.querySelectorAll(
+          'button, [data-testid*="citation"], [data-testid*="pill"], [class*="copy"], [role="tooltip"], [aria-label="Copy"], [data-testid*="copy"], [data-testid*="meta"]'
+        )
+        garbage.forEach(g => g.remove())
+        clone.querySelectorAll('[data-start],[data-end]').forEach(n => {
+          n.removeAttribute('data-start')
+          n.removeAttribute('data-end')
+        })
+        return clone.innerHTML
+      }
+
+      const collectDeep = (root: ParentNode, selectors: string[], acc: Element[], seen: Set<Element>) => {
+        selectors.forEach(sel => {
+          root.querySelectorAll(sel).forEach(node => {
+            if (!seen.has(node)) {
+              seen.add(node)
+              acc.push(node)
             }
           })
-          .filter(Boolean)
-    )) as ScrapedMessage[]
+        })
+        root.childNodes.forEach(child => {
+          const asEl = child as Element
+          const shadow = (asEl as unknown as { shadowRoot?: ShadowRoot }).shadowRoot
+          if (shadow) collectDeep(shadow, selectors, acc, seen)
+        })
+      }
+
+      const selectorsFlat = groups.flat().flatMap(g => g.split(',').map(s => s.trim()).filter(Boolean))
+      const nodes: Element[] = []
+      collectDeep(document, selectorsFlat, nodes, new Set<Element>())
+
+      return nodes
+        .map(node => {
+          const el = node as HTMLElement
+          const shadow = (node as HTMLElement & { shadowRoot?: ShadowRoot }).shadowRoot
+          const shadowHtml = shadow ? shadow.innerHTML : ''
+          const shadowText = shadow ? shadow.textContent ?? '' : ''
+          const html = (shadowHtml || cleanHtml(el) || '').trim()
+          const text = (shadowText || el.textContent || '').trim()
+          if (!html && !text) return null
+
+          const attrRole =
+            el.getAttribute('data-message-author-role') ??
+            el.getAttribute('data-author') ??
+            el.getAttribute('data-role') ??
+            ''
+          const testId = (el.getAttribute('data-testid') ?? '').toLowerCase()
+          const className = (el.getAttribute('class') ?? '').toLowerCase()
+          const inferRole = (): string => {
+            const source = `${attrRole} ${testId} ${className}`
+            if (/assistant|bot|claude|system|model|gemini|grok/.test(source)) return 'assistant'
+            if (/user|human|you/.test(source)) return 'user'
+            return 'unknown'
+          }
+          const detected = (attrRole || inferRole()).toLowerCase()
+          const role: MessageRole =
+            detected === 'assistant'
+              ? 'assistant'
+              : detected === 'user'
+              ? 'user'
+              : detected === 'system'
+              ? 'system'
+              : detected === 'tool'
+              ? 'tool'
+              : 'unknown'
+          const safeHtml = html || text.replace(/\n/g, '<br>')
+          return { role, html: safeHtml }
+        })
+        .filter((m): m is { role: MessageRole; html: string } => Boolean(m))
+    }, selectorGroups)) as ScrapedMessage[]
 
     if (!messages.length) {
       const dumpPath = await dumpDebug()
@@ -1675,18 +1681,8 @@ async function main(): Promise<void> {
   }
   const config = forgetGh ? {} : loadConfig()
   // Resolve desired formats (format flag takes precedence over html/md-only flags)
-  let produceMd: boolean
-  let produceHtml: boolean
-  if (format === 'md') {
-    produceMd = true
-    produceHtml = false
-  } else if (format === 'html') {
-    produceMd = false
-    produceHtml = true
-  } else {
-    produceMd = !htmlOnly
-    produceHtml = !mdOnly && generateHtml
-  }
+  const produceMd = format !== 'html' && !htmlOnly
+  const produceHtml = format !== 'md' && generateHtml && !mdOnly
   if (!produceMd && !produceHtml) {
     fail('At least one output format is required (Markdown and/or HTML).')
     process.exit(1)
@@ -1700,7 +1696,7 @@ async function main(): Promise<void> {
 
   const ghRepoResolved = ghPagesRepo ?? config.gh?.repo ?? DEFAULT_GH_REPO
   const ghBranchResolved = ghPagesBranch || config.gh?.branch || 'gh-pages'
-  const ghDirResolved = ghPagesDir || config.gh?.dir || 'csctm'
+  const ghDirResolved = (ghPagesDir ?? config.gh?.dir ?? 'csctm').trim() || 'csctm'
   const hasStoredGh = Boolean(config.gh)
   const hasExplicitRepo = Boolean(ghPagesRepo)
   const shouldPublish = hasExplicitRepo || hasStoredGh
@@ -1826,7 +1822,7 @@ async function main(): Promise<void> {
         quiet,
         verbose,
         dryRun,
-        remember: shouldRemember,
+        remember: shouldRemember && !dryRun,
         config,
         entry: { title: stripProviderPrefix(title), addedAt: retrievedAt }
       })
