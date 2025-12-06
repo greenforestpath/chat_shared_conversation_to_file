@@ -13,6 +13,8 @@ EASY=0
 QUIET=0
 FROM_SOURCE=0
 LOCK_FILE="/tmp/csctm-install.lock"
+VERIFY=0
+CHECKSUM_URL="${CHECKSUM_URL:-}"
 
 log() { [ "$QUIET" -eq 1 ] && return 0; echo -e "$@"; }
 info() { log "\033[0;34m→\033[0m $*"; }
@@ -22,7 +24,7 @@ err()  { log "\033[0;31m✗\033[0m $*"; }
 
 usage() {
   cat <<'EOFU'
-Usage: install.sh [--version vX.Y.Z] [--dest DIR] [--system] [--from-source] [--easy-mode] [--quiet]
+Usage: install.sh [--version vX.Y.Z] [--dest DIR] [--system] [--from-source] [--easy-mode] [--quiet] [--verify]
 
 Environment overrides:
   VERSION         Tag to install (defaults to latest release)
@@ -30,6 +32,7 @@ Environment overrides:
   REPO            GitHub repo  (default: chatgpt_shared_conversation_to_markdown_file)
   DEST            Install dir  (default: ~/.local/bin or /usr/local/bin with --system)
   BINARY          Installed name (default: csctm)
+  CHECKSUM_URL    Override checksum URL (defaults to <binary>.sha256 next to artifact)
 EOFU
 }
 
@@ -40,6 +43,7 @@ while [ $# -gt 0 ]; do
     --system) DEST="/usr/local/bin"; shift;;
     --from-source) FROM_SOURCE=1; shift;;
     --easy-mode) EASY=1; shift;;
+    --verify) VERIFY=1; shift;;
     --quiet|-q) QUIET=1; shift;;
     -h|--help) usage; exit 0;;
     *) shift;;
@@ -151,6 +155,36 @@ download_binary() {
     FROM_SOURCE=1
     return 1
   fi
+
+  # Optional checksum verification
+  local hash_cmd=""
+  if command -v sha256sum >/dev/null 2>&1; then
+    hash_cmd="sha256sum"
+  elif command -v shasum >/dev/null 2>&1; then
+    hash_cmd="shasum -a 256"
+  fi
+
+  if [ -n "$hash_cmd" ]; then
+    local checksum_target="${CHECKSUM_URL:-${url}.sha256}"
+    if curl -fL "$checksum_target" -o "$TMP/${ASSET}.sha256"; then
+      local expected
+      expected=$(awk '{print $1}' "$TMP/${ASSET}.sha256" | head -n1)
+      if [ -n "$expected" ]; then
+        echo "${expected}  $TMP/${ASSET}" | eval "$hash_cmd -c -" || { err "Checksum verification failed"; exit 1; }
+        ok "Checksum verified"
+      fi
+    else
+      if [ "$VERIFY" -eq 1 ]; then
+        err "Checksum required but not available at ${checksum_target}"
+        exit 1
+      else
+        warn "Checksum not available; proceeding without verification"
+      fi
+    fi
+  else
+    warn "No sha256 utility found; skipping checksum verification"
+  fi
+
   install -m 0755 "$TMP/${ASSET}" "$DEST/${BINARY}"
   ok "Installed ${BINARY} to $DEST"
 }

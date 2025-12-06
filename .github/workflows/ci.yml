@@ -21,6 +21,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Cache Bun
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/bun
+            ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock', 'package.json') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
       - name: Setup Bun
         uses: oven-sh/setup-bun@v1
         with:
@@ -91,9 +101,20 @@ jobs:
     name: End-to-end scrape check
     runs-on: ubuntu-latest
     needs: test
+    timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Cache Bun
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/bun
+            ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock', 'package.json') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v1
@@ -117,6 +138,20 @@ jobs:
       - name: Run e2e smoke
         run: CSCTM_E2E=1 bun run test:e2e
 
+  linkcheck:
+    name: README link check
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Link check README
+        uses: lycheeverse/lychee-action@v1
+        with:
+          args: "--exclude chatgpt.com/share/ --timeout 20 --max-redirects 5 README.md"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   release:
     name: Create GitHub release
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
@@ -130,6 +165,11 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+
+      - name: Generate checksums
+        run: |
+          set -euo pipefail
+          find artifacts -maxdepth 2 -type f -print0 | sort -z | xargs -0 shasum -a 256 > artifacts/sha256.txt
 
       - name: List artifacts
         run: ls -lh artifacts

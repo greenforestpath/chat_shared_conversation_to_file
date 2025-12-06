@@ -26,8 +26,8 @@ curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/chatgpt_shared_co
 
 ## 🧭 Usage
 ```bash
-csctm <chatgpt-share-url>
-csctm https://chatgpt.com/share/69343092-91ac-800b-996c-7552461b9b70
+csctm <chatgpt-share-url> [--timeout-ms 60000] [--outfile path] [--quiet] [--check-updates] [--version]
+csctm https://chatgpt.com/share/69343092-91ac-800b-996c-7552461b9b70 --timeout-ms 90000
 ```
 
 What you’ll see:
@@ -103,6 +103,8 @@ Checks performed:
 - Workflow: lint → typecheck → unit tests → e2e scrape (Ubuntu) → matrix builds (macOS/Linux/Windows) → upload artifacts.
 - Tagged pushes (`v*`) create a GitHub release via `gh release create` and attach built binaries.
 - Playwright browsers are cached between e2e runs to speed up CI.
+- Release bundles now include `sha256.txt` for checksum verification; installer will verify when available (or with `--verify`).
+- README links are checked in CI (chatgpt share link excluded to avoid auth issues).
 
 ## 📦 Artifacts & install destinations
 - Binaries: `dist/csctm` (macOS/Linux), `dist/csctm.exe` (Windows).
@@ -120,11 +122,23 @@ Checks performed:
 - **Share layout changed?** The scraper waits for `article [data-message-author-role]`; open an issue with the share URL so selectors can be updated.
 - **Need to force source build?** Use `--from-source` (Bun + git required).
 
+## ⚠️ Failure modes & fixes
+- **403/redirect/login page:** Ensure the link is a public ChatGPT share URL; retry with `--timeout-ms 90000`.
+- **No messages found:** Page structure may have changed; selectors target `article [data-message-author-role]`. Please report the share URL.
+- **Download stalls:** Set `PLAYWRIGHT_BROWSERS_PATH` to a cached Chromium bundle to skip downloads (see cache paths in FAQ).
+- **Filename conflicts/invalid names:** Filenames are slugified, truncated to 120 chars, avoid Windows reserved names, and auto-suffix `_2`, `_3`, etc.
+- **Partial writes:** Files are written atomically via temp+rename in the target directory.
+
 ## ❓ FAQ
 - **Where do the binaries come from?** CI builds macOS/Linux/Windows artifacts on tagged releases; the installer fetches from the latest tag (`releases/latest`) unless you pin `VERSION=vX.Y.Z`.
 - **How are filenames generated?** Conversation titles are lowercased, non-alphanumerics → `_`, trimmed of leading/trailing `_`; collisions append `_2`, `_3`, ….
 - **Where does Playwright cache browsers?** Default: `~/.cache/ms-playwright` (Linux/macOS) or `%USERPROFILE%\\AppData\\Local\\ms-playwright` (Windows). CI caches this directory between runs.
 - **Why does first run take longer?** Playwright downloads Chromium once. Subsequent runs reuse the cached browser bundle.
+- **Can I control timeouts?** Yes: `--timeout-ms` sets both navigation and selector waits (default 60000ms).
+- **Can I override the output path?** Yes: `--outfile /path/to/output.md` bypasses slug-based naming.
+- **Can I reduce console output?** `--quiet` minimizes progress logs; errors still print.
+- **Can I check for updates?** Add `--check-updates` to print the latest GitHub release tag (no network calls by default).
+- **Can I verify downloads?** The installer fetches adjacent `.sha256` files when present; use `--verify` to require a checksum.
 - **Can I run headful?** Not currently; the tool is headless-only for speed and determinism.
 - **Can I change the user agent or selectors?** Edit `src/index.ts` (`chromium.launch` options and `page.waitForSelector` target) and rebuild.
 - **How do I verify installs?** Run `csctm --help` and invoke the bundled E2E: `CSCTM_E2E=1 bun run test:e2e` (network + browser download required).

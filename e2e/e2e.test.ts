@@ -18,6 +18,12 @@ describeFn("csctm end-to-end", () => {
 
   beforeAll(() => {
     tmpDir = mkdtempSync(path.join(os.tmpdir(), "csctm-e2e-"));
+    const cachePath =
+      process.env.PLAYWRIGHT_BROWSERS_PATH ??
+      (process.platform === "win32"
+        ? path.join(process.env.USERPROFILE ?? os.tmpdir(), "AppData", "Local", "ms-playwright")
+        : path.join(os.homedir(), ".cache", "ms-playwright"));
+    console.log(`Playwright cache: ${cachePath}`);
     const build = spawnSync("bun", ["run", "build"], {
       cwd: ROOT,
       stdio: "inherit"
@@ -45,12 +51,22 @@ describeFn("csctm end-to-end", () => {
     const content = readFileSync(outfile, "utf8");
     const normalized = content.replace(/\r\n/g, "\n");
 
+    expect(path.basename(outfile)).toContain("phage_explorer_design_plan");
     expect(content.length).toBeGreaterThan(5000); // ensure reasonably large output
     expect(normalized.split("\n").length).toBeGreaterThan(200); // ensure many lines
     expect(normalized).toContain("# ChatGPT Conversation:");
     expect(normalized).toContain(`Source: ${SHARE_URL}`);
     expect(normalized).not.toMatch(/[\u2028\u2029\0]/); // no problematic unicode or nulls
     expect(normalized).not.toMatch(/\r(?!\n)/); // no stray CRs
+    const retrievedLine = normalized
+      .split("\n")
+      .find(line => line.startsWith("Retrieved:"));
+    expect(retrievedLine).toBeTruthy();
+    expect(retrievedLine).toMatch(/^Retrieved:\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+
+    // crude markdown fence balance check
+    const fenceCount = (normalized.match(/```/g) || []).length;
+    expect(fenceCount % 2).toBe(0);
   });
 });
 
