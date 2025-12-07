@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { chromium, type Browser, type Page } from 'playwright-chromium'
+import { chromium, type Browser, type BrowserContext, type Page } from 'playwright-chromium'
 import TurndownService, { type Rule } from 'turndown'
 import fs from 'fs'
 import path from 'path'
@@ -83,6 +83,8 @@ type CliOptions = {
   ghPagesBranch: string
   ghPagesDir: string
   autoInstallGh: boolean
+  useChromeProfile: boolean
+  stealthMode: boolean
 }
 
 type ParsedArgs = CliOptions & { url: string }
@@ -752,6 +754,8 @@ function parseArgs(args: string[]): ParsedArgs {
   let ghPagesBranch = 'gh-pages'
   let ghPagesDir = 'csctf'
   let autoInstallGh = false
+  let useChromeProfile = false
+  let stealthMode = false
 
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i]
@@ -775,6 +779,12 @@ function parseArgs(args: string[]): ParsedArgs {
         break
       case '--headless':
         headless = true
+        break
+      case '--use-chrome-profile':
+        useChromeProfile = true
+        break
+      case '--stealth':
+        stealthMode = true
         break
       case '--quiet':
         quiet = true
@@ -920,7 +930,9 @@ function parseArgs(args: string[]): ParsedArgs {
     ghPagesRepo,
     ghPagesBranch,
     ghPagesDir,
-    autoInstallGh
+    autoInstallGh,
+    useChromeProfile,
+    stealthMode
   }
 }
 
@@ -975,7 +987,7 @@ function usage(): void {
     [
       `Usage: csctf <chatgpt|gemini|grok-share-url>`,
       `  [--timeout-ms 60000] [--outfile path|--output-dir dir] [--quiet] [--verbose] [--format both|md|html]`,
-      `  [--headful|--headless]`,
+      `  [--headful|--headless] [--stealth] [--use-chrome-profile]`,
       `  [--open] [--copy] [--json] [--title "Custom Title"] [--wait-for-selector "<css>"] [--debug]`,
       `  [--check-updates|--no-check-updates] [--version] [--no-html] [--html-only] [--md-only]`,
       `  [--publish-to-gh-pages] [--gh-pages-repo owner/name] [--gh-pages-branch gh-pages] [--gh-pages-dir dir]`,
@@ -1832,6 +1844,8 @@ async function scrape(
     waitForSelector?: string
     debug?: boolean
     headless: boolean
+    useChromeProfile?: boolean
+    stealthMode?: boolean
   }
 ): Promise<{ title: string; markdown: string; retrievedAt: string }> {
   const td = buildTurndown()
@@ -1872,30 +1886,258 @@ async function scrape(
     }
   }
 
-  try {
-    browser = await chromium.launch({
-      headless: opts.headless,
-      executablePath: resolveChromiumExecutable(),
-      args: [
-        '--disable-blink-features=AutomationControlled',
-        '--disable-features=IsolateOrigins,site-per-process',
-        '--disable-site-isolation-trials'
-      ]
-    })
-    page = await browser.newPage({
-      userAgent:
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-      viewport: { width: 1366, height: 768 }
-    })
-    const realHeaders: Record<string, string> = {
-      'sec-ch-ua': '"Not.A/Brand";v="24", "Chromium";v="122", "Google Chrome";v="122"',
-      'sec-ch-ua-platform': '"macOS"',
-      'sec-ch-ua-mobile': '?0',
-      'upgrade-insecure-requests': '1',
-      'accept-language': 'en-US,en;q=0.9',
-      accept:
-        'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7'
+  // Get Chrome user data directory for profile-based auth
+  const getChromeUserDataDir = (): string | undefined => {
+    const dirs =
+      process.platform === 'darwin'
+        ? [path.join(os.homedir(), 'Library', 'Application Support', 'Google', 'Chrome')]
+        : process.platform === 'win32'
+        ? [
+            path.join(os.homedir(), 'AppData', 'Local', 'Google', 'Chrome', 'User Data'),
+            path.join(os.homedir(), 'AppData', 'Roaming', 'Google', 'Chrome', 'User Data')
+          ]
+        : [path.join(os.homedir(), '.config', 'google-chrome'), path.join(os.homedir(), '.config', 'chromium')]
+    for (const dir of dirs) {
+      if (fs.existsSync(dir)) return dir
     }
+    return undefined
+  }
+
+  // Enhanced stealth init script
+  const stealthScript = () => {
+    // Remove webdriver property completely
+    Object.defineProperty(navigator, 'webdriver', { get: () => undefined })
+    // Delete the property entirely for extra safety
+    // @ts-expect-error: delete webdriver
+    delete navigator.webdriver
+
+    // Override permissions API
+    const originalQuery = window.navigator.permissions.query
+    // @ts-expect-error: override permissions
+    window.navigator.permissions.query = (parameters: { name: string }) =>
+      parameters.name === 'notifications'
+        ? Promise.resolve({ state: Notification.permission })
+        : originalQuery(parameters)
+
+    // More realistic navigator properties
+    Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] })
+    Object.defineProperty(navigator, 'platform', {
+      get: () => (navigator.userAgent.includes('Mac') ? 'MacIntel' : 'Win32')
+    })
+    Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 })
+    Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 })
+    Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 0 })
+
+    // Realistic plugins array (Chrome on macOS)
+    Object.defineProperty(navigator, 'plugins', {
+      get: () => {
+        const plugins = [
+          { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+          {
+            name: 'Chrome PDF Viewer',
+            filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai',
+            description: 'Portable Document Format'
+          },
+          { name: 'Native Client', filename: 'internal-nacl-plugin', description: '' }
+        ]
+        const arr = plugins.map(p => {
+          const plugin = Object.create(Plugin.prototype)
+          Object.defineProperty(plugin, 'name', { value: p.name })
+          Object.defineProperty(plugin, 'filename', { value: p.filename })
+          Object.defineProperty(plugin, 'description', { value: p.description })
+          Object.defineProperty(plugin, 'length', { value: 1 })
+          return plugin
+        })
+        // @ts-expect-error: custom plugins array
+        arr.item = (i: number) => arr[i]
+        // @ts-expect-error: custom plugins array
+        arr.namedItem = (name: string) => arr.find(p => p.name === name)
+        // @ts-expect-error: custom plugins array
+        arr.refresh = () => {}
+        return arr
+      }
+    })
+
+    // Chrome runtime object for additional stealth
+    // @ts-expect-error: chrome object
+    window.chrome = {
+      runtime: {
+        connect: () => {},
+        sendMessage: () => {},
+        onMessage: { addListener: () => {} }
+      },
+      loadTimes: () => ({
+        commitLoadTime: Date.now() / 1000 - Math.random() * 2,
+        connectionInfo: 'h2',
+        finishDocumentLoadTime: Date.now() / 1000 - Math.random(),
+        finishLoadTime: Date.now() / 1000,
+        firstPaintAfterLoadTime: 0,
+        firstPaintTime: Date.now() / 1000 - Math.random() * 2,
+        navigationType: 'Other',
+        npnNegotiatedProtocol: 'h2',
+        requestTime: Date.now() / 1000 - Math.random() * 3,
+        startLoadTime: Date.now() / 1000 - Math.random() * 3,
+        wasAlternateProtocolAvailable: false,
+        wasFetchedViaSpdy: true,
+        wasNpnNegotiated: true
+      }),
+      csi: () => ({
+        onloadT: Date.now(),
+        pageT: Date.now() - Math.random() * 5000,
+        startE: Date.now() - Math.random() * 5000,
+        tran: 15
+      })
+    }
+
+    // Override toString to hide modifications
+    const origToString = Function.prototype.toString
+    Function.prototype.toString = function () {
+      if (this === window.navigator.permissions.query) {
+        return 'function query() { [native code] }'
+      }
+      return origToString.call(this)
+    }
+
+    // Canvas fingerprint randomization
+    const origGetContext = HTMLCanvasElement.prototype.getContext
+    // @ts-expect-error: override getContext
+    HTMLCanvasElement.prototype.getContext = function (type: string, ...args: unknown[]) {
+      const ctx = origGetContext.call(this, type, ...args)
+      if (type === '2d' && ctx) {
+        const origGetImageData = ctx.getImageData
+        ctx.getImageData = function (...args: Parameters<typeof origGetImageData>) {
+          const imageData = origGetImageData.apply(this, args)
+          // Add tiny noise to prevent fingerprinting
+          for (let i = 0; i < imageData.data.length; i += 4) {
+            imageData.data[i] = Math.max(0, Math.min(255, imageData.data[i] + (Math.random() - 0.5) * 2))
+          }
+          return imageData
+        }
+      }
+      return ctx
+    }
+
+    // WebGL fingerprint protection
+    const getParameterProxyHandler = {
+      apply(target: Function, thisArg: WebGLRenderingContext, args: unknown[]) {
+        const param = args[0]
+        // Randomize some WebGL parameters
+        if (param === 37445) return 'Intel Inc.' // UNMASKED_VENDOR_WEBGL
+        if (param === 37446) return 'Intel Iris OpenGL Engine' // UNMASKED_RENDERER_WEBGL
+        return Reflect.apply(target, thisArg, args)
+      }
+    }
+    // @ts-expect-error: proxy
+    WebGLRenderingContext.prototype.getParameter = new Proxy(
+      WebGLRenderingContext.prototype.getParameter,
+      getParameterProxyHandler
+    )
+  }
+
+  // Current Chrome UA (Dec 2024)
+  const chromeVersion = '131'
+  const userAgent = `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion}.0.0.0 Safari/537.36`
+  const realHeaders: Record<string, string> = {
+    'sec-ch-ua': `"Google Chrome";v="${chromeVersion}", "Chromium";v="${chromeVersion}", "Not_A Brand";v="24"`,
+    'sec-ch-ua-platform': '"macOS"',
+    'sec-ch-ua-mobile': '?0',
+    'sec-fetch-dest': 'document',
+    'sec-fetch-mode': 'navigate',
+    'sec-fetch-site': 'none',
+    'sec-fetch-user': '?1',
+    'upgrade-insecure-requests': '1',
+    'accept-language': 'en-US,en;q=0.9',
+    accept:
+      'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7'
+  }
+
+  // Launch browser with stealth settings
+  const launchBrowser = async (headless: boolean, useProfile: boolean) => {
+    const launchArgs = [
+      '--disable-blink-features=AutomationControlled',
+      '--disable-features=IsolateOrigins,site-per-process',
+      '--disable-site-isolation-trials',
+      '--disable-dev-shm-usage',
+      '--no-first-run',
+      '--no-default-browser-check',
+      '--disable-infobars',
+      '--window-size=1366,768',
+      '--disable-backgrounding-occluded-windows',
+      '--disable-renderer-backgrounding'
+    ]
+
+    // When using profile, we need to launch with persistent context
+    if (useProfile) {
+      const userDataDir = getChromeUserDataDir()
+      if (userDataDir && fs.existsSync(userDataDir)) {
+        // Create a temporary profile based on the real one to avoid locking issues
+        const tempProfile = fs.mkdtempSync(path.join(os.tmpdir(), 'csctf-profile-'))
+        // Copy cookies and local storage from real profile
+        const defaultProfile = path.join(userDataDir, 'Default')
+        if (fs.existsSync(defaultProfile)) {
+          const cookiesSrc = path.join(defaultProfile, 'Cookies')
+          const cookiesDst = path.join(tempProfile, 'Default', 'Cookies')
+          const localStateSrc = path.join(userDataDir, 'Local State')
+          const localStateDst = path.join(tempProfile, 'Local State')
+          fs.mkdirSync(path.join(tempProfile, 'Default'), { recursive: true })
+          if (fs.existsSync(cookiesSrc)) {
+            try {
+              fs.copyFileSync(cookiesSrc, cookiesDst)
+            } catch {
+              // Ignore copy errors - Chrome may have the file locked
+            }
+          }
+          if (fs.existsSync(localStateSrc)) {
+            try {
+              fs.copyFileSync(localStateSrc, localStateDst)
+            } catch {
+              // Ignore copy errors
+            }
+          }
+        }
+        return chromium.launchPersistentContext(tempProfile, {
+          headless,
+          executablePath: resolveChromiumExecutable(),
+          args: launchArgs,
+          userAgent,
+          viewport: { width: 1366, height: 768 },
+          ignoreDefaultArgs: ['--enable-automation']
+        })
+      }
+    }
+
+    // Standard launch without profile
+    const b = await chromium.launch({
+      headless,
+      executablePath: resolveChromiumExecutable(),
+      args: launchArgs,
+      ignoreDefaultArgs: ['--enable-automation']
+    })
+    return b
+  }
+
+  try {
+    // Try with stealth settings first
+    const useProfile = opts.useChromeProfile ?? false
+    const useStealth = opts.stealthMode ?? true // Enable stealth by default now
+    let currentHeadless = opts.headless
+    let context: BrowserContext | null = null
+
+    const result = await launchBrowser(currentHeadless, useProfile)
+    if ('newPage' in result && typeof result.newPage === 'function') {
+      // It's a BrowserContext from launchPersistentContext
+      context = result as BrowserContext
+      browser = null
+      page = await context.newPage()
+    } else {
+      // It's a Browser
+      browser = result as Browser
+      page = await browser.newPage({
+        userAgent,
+        viewport: { width: 1366, height: 768 }
+      })
+    }
+
     await page.setExtraHTTPHeaders(realHeaders)
     await page.route('**/*', route => {
       const headers = {
@@ -1904,16 +2146,21 @@ async function scrape(
       }
       route.continue({ headers })
     })
-    await page.addInitScript(() => {
-      // Basic stealth to reduce bot-detection/CF challenges.
-      Object.defineProperty(navigator, 'webdriver', { get: () => undefined })
-      Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] })
-      Object.defineProperty(navigator, 'platform', { get: () => 'MacIntel' })
-      Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] })
-      Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 })
-      // @ts-expect-error: provide a minimal chrome runtime shim for stealth
-      window.chrome = { runtime: {} }
-    })
+
+    if (useStealth) {
+      await page.addInitScript(stealthScript)
+    } else {
+      // Minimal stealth (old behavior)
+      await page.addInitScript(() => {
+        Object.defineProperty(navigator, 'webdriver', { get: () => undefined })
+        Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] })
+        Object.defineProperty(navigator, 'platform', { get: () => 'MacIntel' })
+        Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] })
+        Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 })
+        // @ts-expect-error: provide a minimal chrome runtime shim for stealth
+        window.chrome = { runtime: {} }
+      })
+    }
     if (!page) throw new Error('Failed to create browser page.')
 
     // Stage 1: quick DOM load
@@ -1925,24 +2172,93 @@ async function scrape(
       'loading the share URL (check that the link is public and reachable)'
     )
     // Stage 2: try to reach network-idle, but don't hang forever
-    await page.waitForLoadState('networkidle', { timeout: Math.max(3000, timeoutMs / 4) }).catch(() => {})
+    await page.waitForLoadState('networkidle', { timeout: Math.max(5000, timeoutMs / 4) }).catch(() => {})
 
     // Handle bot-block/CF challenges with patience instead of immediate fail.
-    const challengePattern = /cloudflare|just a moment|verify you are human|enable javascript|checking your browser/i
+    // Check the page title and very short body text for challenge indicators
+    // This avoids false positives from actual conversation content mentioning these words
+    const isChallengeTitle = (title: string) =>
+      /^(just a moment|checking|verify|attention required|one moment|please wait)/i.test(title) ||
+      /cloudflare/i.test(title)
+    const isChallengeBody = (bodyText: string) => {
+      // Only check short body text (challenge pages have minimal content)
+      if (bodyText.length > 2000) return false
+      return /verify you are human|enable javascript.*cookies|checking your browser|ray id:/i.test(bodyText)
+    }
     let challengeClear = false
-    for (let i = 0; i < 3; i += 1) {
+
+    // More patient challenge handling - up to 5 attempts with increasing wait times
+    const challengeWaits = [3000, 5000, 8000, 10000, 12000]
+    for (let i = 0; i < challengeWaits.length; i += 1) {
       const bodyText = (await page.textContent('body').catch(() => '')) || ''
-      if (!challengePattern.test(bodyText)) {
+      const title = (await page.title().catch(() => '')) || ''
+      if (!isChallengeTitle(title) && !isChallengeBody(bodyText)) {
         challengeClear = true
         break
       }
-      await page.waitForTimeout(8000)
-      await page.waitForLoadState('networkidle').catch(() => {})
+      if (opts.debug) {
+        console.error(chalk.gray(`Challenge detected (attempt ${i + 1}/${challengeWaits.length}), waiting...`))
+      }
+      await page.waitForTimeout(challengeWaits[i])
+      await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {})
     }
+
+    // If still blocked and we were in headless mode, try headful as fallback
+    if (!challengeClear && currentHeadless) {
+      if (opts.debug) {
+        console.error(chalk.yellow('Headless blocked, retrying in headful mode...'))
+      }
+      // Close current browser/context
+      if (context) await context.close().catch(() => {})
+      if (browser) await browser.close().catch(() => {})
+
+      // Retry with headful mode
+      currentHeadless = false
+      const result2 = await launchBrowser(false, useProfile)
+      if ('newPage' in result2 && typeof result2.newPage === 'function') {
+        context = result2 as BrowserContext
+        browser = null
+        page = await context.newPage()
+      } else {
+        browser = result2 as Browser
+        page = await browser.newPage({
+          userAgent,
+          viewport: { width: 1366, height: 768 }
+        })
+      }
+
+      await page.setExtraHTTPHeaders(realHeaders)
+      await page.route('**/*', route => {
+        const headers = {
+          ...route.request().headers(),
+          ...realHeaders
+        }
+        route.continue({ headers })
+      })
+      if (useStealth) {
+        await page.addInitScript(stealthScript)
+      }
+
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: Math.max(10000, timeoutMs / 2) })
+      await page.waitForLoadState('networkidle', { timeout: Math.max(5000, timeoutMs / 4) }).catch(() => {})
+
+      // Check again with longer waits in headful mode
+      for (let i = 0; i < 5; i += 1) {
+        const bodyText = (await page.textContent('body').catch(() => '')) || ''
+        const title = (await page.title().catch(() => '')) || ''
+        if (!isChallengeTitle(title) && !isChallengeBody(bodyText)) {
+          challengeClear = true
+          break
+        }
+        await page.waitForTimeout(5000)
+        await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {})
+      }
+    }
+
     if (!challengeClear) {
       throw new AppError(
         'The share page appears to be blocking automation (bot/challenge page detected).',
-        'Open the link in a regular browser to confirm it loads without a challenge, or try an alternate share.'
+        'Try --use-chrome-profile to use your real browser session, or --headful to watch the browser. You may need to visit the link in Chrome first to pass any captcha.'
       )
     }
 
@@ -2222,7 +2538,9 @@ async function main(): Promise<void> {
     publishGhPages,
     ghPagesRepo,
     ghPagesBranch,
-    ghPagesDir
+    ghPagesDir,
+    useChromeProfile,
+    stealthMode
   } = opts
 
   const step = STEP(quiet, verbose)
@@ -2296,7 +2614,9 @@ async function main(): Promise<void> {
     const { title, markdown, retrievedAt } = await scrape(url, timeoutMs, provider, {
       waitForSelector,
       debug,
-      headless: effectiveHeadless
+      headless: effectiveHeadless,
+      useChromeProfile,
+      stealthMode
     })
     endLaunch()
     endOpen()
