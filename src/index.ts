@@ -2656,65 +2656,79 @@ async function scrape(
 
       if (!opts.quiet) console.error(chalk.blue('[3/8] Extracting conversation...'))
 
-      // CDP mode: Extract content directly using puppeteer and return early
-      // Claude.ai selectors
-      const claudeSelectors = [
-        '[data-testid="user-message"]',
-        '[data-is-streaming]',
-        '.prose',
-        '[class*="message"]'
-      ]
+      // CDP mode: Extract content using puppeteer with provider-specific selectors
+      const cdpSelectors = PROVIDER_SELECTOR_CANDIDATES[provider] ?? PROVIDER_SELECTOR_CANDIDATES.chatgpt
 
-      // Wait for content
-      let hasContent = false
-      for (const selector of claudeSelectors) {
+      // Wait for content with provider-specific selectors
+      let workingSelector: string | null = null
+      for (const group of cdpSelectors) {
+        const combined = group.join(',')
         try {
-          await puppeteerPage.waitForSelector(selector, { timeout: 5000 })
-          hasContent = true
+          await puppeteerPage.waitForSelector(combined, { timeout: 5000 })
+          workingSelector = combined
+          if (!opts.quiet) console.error(chalk.gray(`    Found content with: ${combined.slice(0, 50)}...`))
           break
         } catch {
-          // Try next selector
+          // Try next selector group
         }
       }
 
-      if (!hasContent) {
+      if (!workingSelector) {
         throw new AppError(
-          'Could not find conversation content on Claude.ai.',
+          `Could not find conversation content for ${provider}.`,
           'The page may still be loading or the share link may be invalid.'
         )
       }
 
-      // Extract messages using puppeteer
-      const messages = await puppeteerPage.evaluate(() => {
+      // Extract messages using puppeteer with provider-aware logic
+      const messages = await puppeteerPage.evaluate((prov: string) => {
         const results: { role: string; content: string }[] = []
 
-        // Try to find user and assistant messages
-        const userMsgs = document.querySelectorAll('[data-testid="user-message"]')
-        const assistantMsgs = document.querySelectorAll('[data-is-streaming], .prose')
+        if (prov === 'chatgpt') {
+          // ChatGPT: messages have data-message-author-role attribute
+          const msgs = document.querySelectorAll('[data-message-author-role]')
+          msgs.forEach(el => {
+            const role = el.getAttribute('data-message-author-role') || 'unknown'
+            results.push({ role, content: el.innerHTML })
+          })
+        } else if (prov === 'claude') {
+          // Claude: user-message and data-is-streaming
+          const userMsgs = document.querySelectorAll('[data-testid="user-message"]')
+          const assistantMsgs = document.querySelectorAll('[data-is-streaming], .prose')
+          userMsgs.forEach(el => results.push({ role: 'user', content: el.innerHTML }))
+          assistantMsgs.forEach(el => results.push({ role: 'assistant', content: el.innerHTML }))
+        } else if (prov === 'gemini') {
+          // Gemini: user-query and response-container
+          const userMsgs = document.querySelectorAll('user-query')
+          const assistantMsgs = document.querySelectorAll('response-container')
+          userMsgs.forEach(el => results.push({ role: 'user', content: el.innerHTML }))
+          assistantMsgs.forEach(el => results.push({ role: 'assistant', content: el.innerHTML }))
+        } else if (prov === 'grok') {
+          // Grok: similar to ChatGPT with message containers
+          const msgs = document.querySelectorAll('[data-testid*="message"], [data-message-author-role]')
+          msgs.forEach(el => {
+            const role = el.getAttribute('data-message-author-role') ||
+                        (el.className.includes('user') ? 'user' : 'assistant')
+            results.push({ role, content: el.innerHTML })
+          })
+        }
 
-        // If specific selectors don't work, try generic message containers
-        if (userMsgs.length === 0 && assistantMsgs.length === 0) {
-          const allMsgs = document.querySelectorAll('[class*="message"]')
+        // Generic fallback if no messages found
+        if (results.length === 0) {
+          const allMsgs = document.querySelectorAll('[class*="message"], article, [role="article"]')
           allMsgs.forEach(el => {
             const text = el.textContent?.trim() || ''
-            if (text) {
+            if (text && text.length > 10) {
               results.push({ role: 'unknown', content: el.innerHTML })
             }
-          })
-        } else {
-          userMsgs.forEach(el => {
-            results.push({ role: 'user', content: el.innerHTML })
-          })
-          assistantMsgs.forEach(el => {
-            results.push({ role: 'assistant', content: el.innerHTML })
           })
         }
 
         return results
-      })
+      }, provider)
 
       // Get page title
-      const pageTitle = await puppeteerPage.title() || 'Claude Conversation'
+      const pageTitle = await puppeteerPage.title() || `${provider.charAt(0).toUpperCase() + provider.slice(1)} Conversation`
 
       // Close puppeteer browser
       await puppeteerBrowser.disconnect()
@@ -2836,7 +2850,7 @@ async function scrape(
       }
 
       return {
-        title: pageTitle.replace(/\s*[-|].*$/, '').trim() || 'Claude Conversation',
+        title: pageTitle.replace(/\s*[-|].*$/, '').trim() || `${provider.charAt(0).toUpperCase() + provider.slice(1)} Conversation`,
         markdown: normalizeLineTerminators(lines.join('\n')),
         retrievedAt: new Date().toISOString()
       }
