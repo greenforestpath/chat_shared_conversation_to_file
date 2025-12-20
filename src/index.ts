@@ -976,23 +976,23 @@ const formatDuration = (ms: number): string => {
 const STEP = (quiet: boolean, verbose: boolean) => (n: number, total: number, msg: string) => {
   if (quiet) return () => {}
   const start = Date.now()
-  console.log(`${chalk.gray(`[${n}/${total}]`)} ${chalk.cyan(msg)}`)
+  console.error(`${chalk.gray(`[${n}/${total}]`)} ${chalk.cyan(msg)}`)
   let spinner: ReturnType<typeof setInterval> | undefined
   if (verbose) {
     let dots = 0
     spinner = setInterval(() => {
       dots = (dots + 1) % 4
       const tail = '.'.repeat(dots)
-      process.stdout.write(`\r${chalk.gray('   working' + tail.padEnd(3, ' '))}`)
+      process.stderr.write(`\r${chalk.gray('   working' + tail.padEnd(3, ' '))}`)
     }, 400)
   }
   return () => {
     if (spinner) {
       clearInterval(spinner)
-      process.stdout.write('\r')
+      process.stderr.write('\r')
     }
     const elapsed = Date.now() - start
-    console.log(`   ${chalk.gray(`↳ ${formatDuration(elapsed)}`)}`)
+    console.error(`   ${chalk.gray(`↳ ${formatDuration(elapsed)}`)}`)
   }
 }
 
@@ -1006,7 +1006,7 @@ const FAIL = (quiet: boolean) => (msg: string) => {
 const DONE = (quiet: boolean) => (msg: string, elapsedMs?: number) => {
   if (quiet) return
   const suffix = typeof elapsedMs === 'number' ? chalk.gray(` (${formatDuration(elapsedMs)})`) : ''
-  console.log(`${chalk.green('✔')} ${msg}${suffix}`)
+  console.error(`${chalk.green('✔')} ${msg}${suffix}`)
 }
 
 function usage(): void {
@@ -1195,7 +1195,7 @@ async function checkForUpdates(currentVersion: string, quiet: boolean): Promise<
           const msg = upToDate
             ? chalk.gray(`You are on the latest version (v${current}).`)
             : chalk.gray(`Latest release (cached): v${latest} (current v${current}).`)
-          console.log(msg)
+          console.error(msg)
         }
         return
       }
@@ -1211,7 +1211,7 @@ async function checkForUpdates(currentVersion: string, quiet: boolean): Promise<
       }
     })
     if (!res.ok) {
-      if (!quiet) console.log(chalk.gray('Skipped update check (GitHub unavailable).'))
+      if (!quiet) console.error(chalk.gray('Skipped update check (GitHub unavailable).'))
       return
     }
     const data = (await res.json()) as { tag_name?: string }
@@ -1223,7 +1223,7 @@ async function checkForUpdates(currentVersion: string, quiet: boolean): Promise<
         const msg = upToDate
           ? chalk.gray(`You are on the latest version (v${current}).`)
           : chalk.gray(`Latest release: v${latest} (current v${current}).`)
-        console.log(msg)
+        console.error(msg)
       }
       try {
         fs.mkdirSync(CONFIG_DIR, { recursive: true })
@@ -1233,7 +1233,7 @@ async function checkForUpdates(currentVersion: string, quiet: boolean): Promise<
       }
     }
   } catch {
-    if (!quiet) console.log(chalk.gray('Skipped update check (offline or GitHub unavailable).'))
+    if (!quiet) console.error(chalk.gray('Skipped update check (offline or GitHub unavailable).'))
   }
 }
 
@@ -1320,8 +1320,8 @@ async function confirmPublish(summary: string, yes: boolean): Promise<void> {
   if (!process.stdin.isTTY) {
     throw new Error('Publishing requires confirmation (type PROCEED) or use --yes in non-interactive environments.')
   }
-  console.log(chalk.yellow(summary))
-  console.log(chalk.yellow('Type PROCEED to publish to GitHub Pages (public): '))
+  console.error(chalk.yellow(summary))
+  console.error(chalk.yellow('Type PROCEED to publish to GitHub Pages (public): '))
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
   const answer: string = await new Promise(resolve => rl.question('> ', resolve))
   rl.close()
@@ -1695,7 +1695,7 @@ export async function publishToGhPages(opts: PublishOpts): Promise<AppConfig> {
   }
 
   const logProgress = (msg: string) => {
-    if (!quiet) console.log(chalk.gray(`   ${msg}`))
+    if (!quiet) console.error(chalk.gray(`   ${msg}`))
   }
 
   const gitWithRetry = (args: string[], label: string, attempts = 3, delayMs = 500): number => {
@@ -1704,7 +1704,7 @@ export async function publishToGhPages(opts: PublishOpts): Promise<AppConfig> {
       const res = spawnSync('git', args, { cwd: tmp!, stdio: quiet ? 'ignore' : 'inherit', env: gitEnv })
       lastStatus = res.status ?? 1
       if (lastStatus === 0) return 0
-      if (!quiet) console.log(chalk.gray(`   retrying ${label} (${i + 1}/${attempts})...`))
+      if (!quiet) console.error(chalk.gray(`   retrying ${label} (${i + 1}/${attempts})...`))
       const waitMs = Math.min(2000, delayMs * (i + 1))
       const start = Date.now()
       while (Date.now() - start < waitMs) {
@@ -1818,7 +1818,7 @@ export async function publishToGhPages(opts: PublishOpts): Promise<AppConfig> {
   }
 
   if (dryRun) {
-    if (!quiet) console.log(chalk.gray('Dry run: skipping git commit/push'))
+    if (!quiet) console.error(chalk.gray('Dry run: skipping git commit/push'))
     return config
   }
 
@@ -3418,10 +3418,10 @@ async function main(): Promise<void> {
     process.exit(1)
   }
   if (!quiet && htmlOnly) {
-    console.log(chalk.yellow('Note: --html-only will skip Markdown output.'))
+    console.error(chalk.yellow('Note: --html-only will skip Markdown output.'))
   }
   if (!quiet && mdOnly) {
-    console.log(chalk.yellow('Note: --md-only will skip HTML output.'))
+    console.error(chalk.yellow('Note: --md-only will skip HTML output.'))
   }
 
   const ghRepoResolved = ghPagesRepo ?? config.gh?.repo ?? DEFAULT_GH_REPO
@@ -3505,12 +3505,12 @@ async function main(): Promise<void> {
     if (!quiet) {
       const endLocation = step(idx++, totalSteps, 'Location')
       writtenFiles.forEach(f => {
-        console.log(`   ${chalk.green(f.path)}`)
+        console.error(`   ${chalk.green(f.path)}`)
       })
       const mdPath = writtenFiles.find(f => f.kind === 'md')
       const htmlPath = writtenFiles.find(f => f.kind === 'html')
       if (mdPath || htmlPath) {
-        console.log(chalk.gray(`   Hint: ${VIEWER_CMD} <path> to view the export locally.`))
+        console.error(chalk.gray(`   Hint: ${VIEWER_CMD} <path> to view the export locally.`))
       }
       endLocation()
     }
@@ -3518,13 +3518,13 @@ async function main(): Promise<void> {
     // Post-write UX: copy/open/json
     if (copy) {
       const copied = copyToClipboard(markdown, quiet)
-      if (!copied && !quiet) console.log(chalk.yellow(CLIP_HELP))
+      if (!copied && !quiet) console.error(chalk.yellow(CLIP_HELP))
     }
     if (openAfter) {
       const target = writtenFiles.find(f => f.kind === 'html') ?? writtenFiles.find(f => f.kind === 'md')
       if (target) {
         const opened = openFile(target.path, quiet)
-        if (!opened && !quiet) console.log(chalk.yellow(`Could not open ${target.path}; use ${VIEWER_CMD} <path> manually.`))
+        if (!opened && !quiet) console.error(chalk.yellow(`Could not open ${target.path}; use ${VIEWER_CMD} <path> manually.`))
       }
     }
     if (json) {
