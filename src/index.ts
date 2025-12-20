@@ -2357,11 +2357,25 @@ async function scrape(
   }
 
   try {
-    // Auto-CDP mode: Claude.ai has Cloudflare protection too strong for automation
-    // Automatically launch real Chrome and let user solve challenges
-    const needsCdp = opts.cdpEndpoint !== undefined || provider === 'claude'
+    // CDP mode: Used for Claude.ai (Cloudflare protection) or as fallback when Playwright is blocked
+    // When Playwright fails due to bot detection, we automatically fall back to CDP mode
+    let useCdp = opts.cdpEndpoint !== undefined || provider === 'claude'
 
-    if (needsCdp) {
+    // Helper to trigger CDP fallback - closes browser and switches mode
+    const triggerCdpFallback = async (reason: string) => {
+      if (browser) {
+        await browser.close().catch(() => {})
+        browser = null
+      }
+      console.error(chalk.yellow(`\n⚠️  ${reason}`))
+      console.error(chalk.gray('    Falling back to Chrome CDP mode (uses your real browser)...\n'))
+      useCdp = true
+    }
+
+    // Retry loop - allows falling back from Playwright to CDP
+    for (let attempt = 0; attempt < 2; attempt++) {
+
+    if (useCdp) {
       const endpoint = opts.cdpEndpoint || 'http://localhost:9222'
 
       // Track whether we launched Chrome with temp profile (for restoration later)
@@ -2827,7 +2841,8 @@ async function scrape(
         retrievedAt: new Date().toISOString()
       }
     } else {
-      // Standard launch mode
+      // Standard Playwright mode with CDP fallback on any blocking error
+      try {
       const useProfile = opts.useChromeProfile ?? false
       const useStealth = opts.stealthMode ?? true // Enable stealth by default now
       let context: BrowserContext | null = null
@@ -2965,10 +2980,26 @@ async function scrape(
     }
 
       if (!challengeClear) {
+        // On macOS, fall back to CDP mode instead of failing
+        if (process.platform === 'darwin' && !useCdp) {
+          await triggerCdpFallback('Bot/challenge page detected - automation blocked.')
+          continue // Retry with CDP mode
+        }
         throw new AppError(
           'The share page appears to be blocking automation (bot/challenge page detected).',
           'Try --use-chrome-profile to use your real browser session, or --headful to watch the browser. You may need to visit the link in Chrome first to pass any captcha.'
         )
+      }
+      } catch (playwrightSetupErr) {
+        // Catch any error during Playwright setup/navigation and try CDP fallback
+        const errMsg = playwrightSetupErr instanceof Error ? playwrightSetupErr.message : String(playwrightSetupErr)
+        const isBlockingError = /closed|terminated|blocked|bot.?detect|captcha|cloudflare|verify.*human|access denied|timeout|refused/i.test(errMsg)
+
+        if (isBlockingError && process.platform === 'darwin' && !useCdp) {
+          await triggerCdpFallback('Playwright blocked - ' + (errMsg.length > 60 ? errMsg.slice(0, 60) + '...' : errMsg))
+          continue // Retry with CDP mode
+        }
+        throw playwrightSetupErr // Re-throw if not a blocking error or not on macOS
       }
     } // end of standard launch mode else block
 
@@ -3006,7 +3037,12 @@ async function scrape(
     const selector = opts.waitForSelector ?? (await findSelector())
 
     if (!selector) {
-      // ChatGPT has aggressive headless detection - provide helpful message
+      // ChatGPT has aggressive headless detection - fall back to CDP on macOS
+      if (provider === 'chatgpt' && process.platform === 'darwin' && !useCdp) {
+        await triggerCdpFallback('ChatGPT is blocking automated browser access.')
+        continue // Retry with CDP mode
+      }
+      // On non-macOS or if already tried CDP, provide helpful message
       if (currentHeadless && provider === 'chatgpt') {
         throw new AppError(
           'ChatGPT is blocking headless browser access.',
@@ -3216,6 +3252,10 @@ async function scrape(
     }
 
     return { title, markdown: normalizeLineTerminators(lines.join('\n')), retrievedAt }
+    } // end for loop (CDP fallback retry)
+
+    // Should never reach here - for loop always returns or throws
+    throw new AppError('Unexpected state: scraping loop exited without result')
   } catch (err) {
     const dumpPath = await dumpDebug()
     if (dumpPath) {
