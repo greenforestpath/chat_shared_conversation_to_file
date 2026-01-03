@@ -782,12 +782,20 @@ function parseArgs(args: string[]): ParsedArgs {
         if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) timeoutMs = DEFAULT_TIMEOUT_MS
         break
       case '--outfile':
-        outfile = args[i + 1]
-        i += 1
+        if (i + 1 < args.length && !args[i + 1].startsWith('-')) {
+          outfile = args[i + 1]
+          i += 1
+        } else {
+          throw new AppError('--outfile requires a path')
+        }
         break
       case '--output-dir':
-        outputDir = args[i + 1]
-        i += 1
+        if (i + 1 < args.length && !args[i + 1].startsWith('-')) {
+          outputDir = args[i + 1]
+          i += 1
+        } else {
+          throw new AppError('--output-dir requires a directory path')
+        }
         break
       case '--headful':
         headless = false
@@ -1013,7 +1021,7 @@ function usage(): void {
   console.log(
     [
       `Usage: csctf <chatgpt|gemini|grok|claude-share-url>`,
-      `  [--timeout-ms 60000] [--outfile path|--output-dir dir] [--quiet] [--verbose] [--format both|md|html]`,
+      `  [--timeout-ms 60000] [--outfile path|--output-dir dir] [--quiet] [--verbose]`,
       `  [--headful|--headless] [--stealth] [--use-chrome-profile] [--cdp <endpoint>]`,
       `  [--open] [--copy] [--json] [--title "Custom Title"] [--wait-for-selector "<css>"] [--debug]`,
       `  [--check-updates|--no-check-updates] [--version] [--no-html] [--html-only] [--md-only]`,
